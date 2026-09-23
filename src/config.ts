@@ -68,7 +68,7 @@ export const INSTANCE_CONFIG_SCHEMA: Record<string, unknown> = {
       items: { type: "string" },
       title: "Bundles agents may read",
       description:
-        "An allowlist of top-level bundle directories. Leave empty to serve every bundle in the corpus.",
+        "Which parts of the corpus this organization may read; empty means all of it. Enforced on search, browsing and reading alike, so naming a page in a bundle that is not listed is refused rather than merely hidden. It does not decide which agents may call these tools — that is the tool grants on each agent.",
       default: [],
     },
     maxResults: {

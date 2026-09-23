@@ -192,7 +192,15 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
         )}
       </Section>
 
-      <Configuration companyId={companyId} onSaved={refresh} onMessage={notify} />
+      <Configuration
+        companyId={companyId}
+        onSaved={refresh}
+        onMessage={notify}
+        // The allowlist is unusable without the names to type, so the corpus
+        // inventory is passed in rather than left to the placeholder — which used
+        // to name products from a different corpus entirely.
+        availableBundles={status?.bundles ?? []}
+      />
     </div>
   );
 }
@@ -275,10 +283,12 @@ function Configuration({
   companyId,
   onSaved,
   onMessage,
+  availableBundles,
 }: {
   companyId: string;
   onSaved: () => void;
   onMessage: Notify;
+  availableBundles: Array<{ name: string; conceptCount: number }>;
 }) {
   const path = `/api/plugins/${PLUGIN_ID}/config?companyId=${encodeURIComponent(companyId)}`;
   const [stored, setStored] = useState<Record<string, unknown> | null>(null);
@@ -413,12 +423,32 @@ function Configuration({
 
       <Section
         title="Bundles agents may read"
-        description="An allowlist, one bundle name per line. Leave it empty to serve every bundle in the corpus."
+        description="Which parts of this corpus the organization may read. Empty means all of it, which is right when everything in the corpus is documentation you are happy for any agent to cite. Naming bundles does two things: it keeps an organization away from docs it has no business reading, and it stops agents answering from the wrong product's documentation — the more common problem, and the reason to narrow it even when nothing is secret. It does not decide which agents may call these tools; that is the tool grants on each agent."
       >
+        {availableBundles.length > 0 ? (
+          <p style={styles.fieldHint}>
+            In this corpus:{" "}
+            {availableBundles
+              .map((bundle) => `${bundle.name} (${bundle.conceptCount})`)
+              .join(" · ")}
+          </p>
+        ) : (
+          <p style={styles.fieldHint}>
+            No bundles are in the corpus yet, so there is nothing to allow. Point the corpus at a
+            built one first.
+          </p>
+        )}
         <Field
           value={draft.allowedBundles.join("\n")}
           disabled={busy}
-          placeholder={"n8n\ngrafana"}
+          placeholder={
+            availableBundles.length > 0
+              ? availableBundles
+                  .slice(0, 2)
+                  .map((bundle) => bundle.name)
+                  .join("\n")
+              : "one bundle name per line"
+          }
           label="Bundles agents may read"
           multiline
           onCommit={(value) =>
