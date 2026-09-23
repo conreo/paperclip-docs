@@ -491,6 +491,59 @@ function Configuration({
       </Section>
 
       <Section
+        title="Semantic retrieval"
+        description={'Off by default. Keyword search stays the baseline — this adds ranking by meaning, which is what finds a page that says "single sign-on" and never the letters SSO. Every failure falls back to keyword results and says so.'}
+      >
+        <Switch
+          checked={draft.rag.enabled}
+          disabled={busy}
+          label="Also rank by meaning"
+          onChange={(next) =>
+            void write(
+              { rag: { ...draft.rag, enabled: next } },
+              next ? "Semantic retrieval on." : "Semantic retrieval off; keyword search only.",
+            )
+          }
+        />
+        <Field
+          value={draft.rag.endpoint}
+          disabled={busy || !draft.rag.enabled}
+          placeholder="https://api.example.com/v1/embeddings"
+          label="Embeddings endpoint"
+          onCommit={(value) => void write({ rag: { ...draft.rag, endpoint: value } }, "Endpoint updated.")}
+        />
+        <Field
+          value={draft.rag.model}
+          disabled={busy || !draft.rag.enabled}
+          placeholder="bge-small"
+          label="Embedding model"
+          onCommit={(value) => void write({ rag: { ...draft.rag, model: value } }, "Model updated.")}
+        />
+        <Field
+          value={draft.rag.secretRef}
+          disabled={busy || !draft.rag.enabled}
+          placeholder="(a stored secret reference)"
+          label="API key reference"
+          onCommit={(value) => void write({ rag: { ...draft.rag, secretRef: value } }, "Key reference updated.")}
+        />
+        <Field
+          value={String(draft.rag.weight)}
+          disabled={busy || !draft.rag.enabled}
+          placeholder="0.5"
+          label="Weight (0 = keyword only, 1 = semantic only)"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseFloat(value);
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+              onMessage("The weight must be between 0 and 1.", "error");
+              return;
+            }
+            void write({ rag: { ...draft.rag, weight: parsed } }, "Weight updated.");
+          }}
+        />
+      </Section>
+
+      <Section
         title="Rebuilding"
         description="This plugin cannot fetch anything: the runtime gives it no way to run git or pandoc. Collaborating with a runner on the host, it writes a request; the runner performs the build and writes the corpus."
       >

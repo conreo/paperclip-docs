@@ -165,3 +165,16 @@ export type SourceKind = (typeof SOURCE_KINDS)[number];
 /** Conversions the runner knows how to apply. */
 export const SOURCE_CONVERSIONS = ["auto", "rst", "mdx", "none"] as const;
 export type SourceConversion = (typeof SOURCE_CONVERSIONS)[number];
+
+/** The optional vector index: one metadata document and one flat float32 matrix. */
+export const EMBEDDINGS_JSON = "embeddings.json";
+export const EMBEDDINGS_BIN = "embeddings.bin";
+export const EMBEDDINGS_SCHEMA = 1;
+
+/** `rag`: off unless an operator turns it on and names an endpoint. */
+export const DEFAULT_RAG_TOP_K = 20;
+export const MIN_RAG_TOP_K = 1;
+export const MAX_RAG_TOP_K = 200;
+export const DEFAULT_RAG_WEIGHT = 0.5;
+export const MIN_RAG_WEIGHT = 0;
+export const MAX_RAG_WEIGHT = 1;

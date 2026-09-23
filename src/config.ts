@@ -26,6 +26,8 @@ import {
   DEFAULT_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
+  DEFAULT_RAG_TOP_K,
+  DEFAULT_RAG_WEIGHT,
   DEFAULT_REFRESH_MAX_AGE_DAYS,
   MAX_MAX_DOC_CHARS,
   MAX_MAX_RESULTS,
@@ -105,6 +107,30 @@ export const INSTANCE_CONFIG_SCHEMA: Record<string, unknown> = {
         },
       },
     },
+    rag: {
+      type: "object",
+      additionalProperties: false,
+      title: "Semantic retrieval",
+      description:
+        "Off by default. With an embedding endpoint configured, search also ranks by meaning — useful when a page says \"single sign-on\" and never the letters SSO. Keyword search stays the baseline, and any failure here falls back to it.",
+      default: { enabled: false, endpoint: "", model: "", secretRef: "", topK: DEFAULT_RAG_TOP_K, weight: DEFAULT_RAG_WEIGHT },
+      properties: {
+        enabled: { type: "boolean", title: "Use semantic retrieval", default: false },
+        endpoint: { type: "string", title: "Embeddings endpoint (URL)" },
+        model: { type: "string", title: "Embedding model" },
+        secretRef: {
+          type: "string",
+          title: "API key reference",
+          description: "A reference to a stored secret, never the key itself.",
+        },
+        topK: { type: "number", title: "Candidates from the index", default: DEFAULT_RAG_TOP_K },
+        weight: {
+          type: "number",
+          title: "Weight (0 = keyword only, 1 = semantic only)",
+          default: DEFAULT_RAG_WEIGHT,
+        },
+      },
+    },
     sources: {
       type: "array",
       title: "Documentation sources",
@@ -177,6 +203,15 @@ export interface OperatorRefresh {
   maxAgeDays: number;
 }
 
+export interface OperatorRag {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  secretRef: string;
+  topK: number;
+  weight: number;
+}
+
 export interface OperatorConfig {
   enabled: boolean;
   corpusRoot: string;
@@ -185,6 +220,7 @@ export interface OperatorConfig {
   maxDocChars: number;
   refresh: OperatorRefresh;
   sources: OperatorSource[];
+  rag: OperatorRag;
 }
 
 /** The schema defaults, which is what an unconfigured plugin behaves as. */
@@ -196,6 +232,14 @@ export const OPERATOR_CONFIG_DEFAULTS: OperatorConfig = {
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
   refresh: { enabled: false, maxAgeDays: DEFAULT_REFRESH_MAX_AGE_DAYS },
   sources: [],
+  rag: {
+    enabled: false,
+    endpoint: "",
+    model: "",
+    secretRef: "",
+    topK: DEFAULT_RAG_TOP_K,
+    weight: DEFAULT_RAG_WEIGHT,
+  },
 };
 
 function operatorBool(raw: Record<string, unknown>, key: string, fallback: boolean): boolean {
@@ -257,6 +301,24 @@ export function readOperatorConfig(raw: unknown): OperatorConfig {
     ),
     refresh: readOperatorRefresh(record["refresh"]),
     sources: readOperatorSources(record["sources"]),
+    rag: readOperatorRag(record["rag"]),
+  };
+}
+
+/** The RAG block, read leniently: this feeds a form, not a decision. */
+function readOperatorRag(raw: unknown): OperatorRag {
+  const fallback = OPERATOR_CONFIG_DEFAULTS.rag;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ...fallback };
+  const record = raw as Record<string, unknown>;
+  const text = (key: string): string =>
+    typeof record[key] === "string" ? (record[key] as string) : "";
+  return {
+    enabled: operatorBool(record, "enabled", fallback.enabled),
+    endpoint: text("endpoint"),
+    model: text("model"),
+    secretRef: text("secretRef"),
+    topK: operatorNumber(record, "topK", fallback.topK, 1, 200),
+    weight: operatorNumber(record, "weight", fallback.weight, 0, 1),
   };
 }
 

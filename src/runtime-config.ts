@@ -26,13 +26,19 @@ import {
   DEFAULT_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
+  DEFAULT_RAG_TOP_K,
+  DEFAULT_RAG_WEIGHT,
   DEFAULT_REFRESH_MAX_AGE_DAYS,
   MAX_ARG_STRING_CHARS,
   MAX_MAX_DOC_CHARS,
   MAX_MAX_RESULTS,
+  MAX_RAG_TOP_K,
+  MAX_RAG_WEIGHT,
   MAX_REFRESH_MAX_AGE_DAYS,
   MIN_MAX_DOC_CHARS,
   MIN_MAX_RESULTS,
+  MIN_RAG_TOP_K,
+  MIN_RAG_WEIGHT,
   MIN_REFRESH_MAX_AGE_DAYS,
   SOURCE_CONVERSIONS,
   SOURCE_KINDS,
@@ -62,6 +68,23 @@ export interface RuntimeRefreshConfig {
   maxAgeDays: number;
 }
 
+/**
+ * Optional semantic retrieval.
+ *
+ * `enabled` defaults false: this is the only part of the plugin that talks to
+ * anything outside the host, and the only part that sends a query anywhere. Keyword
+ * search needs none of it.
+ */
+export interface RuntimeRagConfig {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  /** A secret *reference*, never the key itself: the value stays in the host. */
+  secretRef: string;
+  topK: number;
+  weight: number;
+}
+
 /** The full runtime surface after defaults are applied. */
 export interface RuntimeConfig {
   enabled: boolean;
@@ -77,6 +100,8 @@ export interface RuntimeConfig {
   refresh: RuntimeRefreshConfig;
   /** What this organization wants built. Read only to write a refresh request. */
   sources: RuntimeSourceDeclaration[];
+  /** Optional semantic retrieval over the corpus. */
+  rag: RuntimeRagConfig;
 }
 
 /** A registry this large is a mistake, not an intention. */
@@ -103,6 +128,14 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
   refresh: { enabled: false, maxAgeDays: DEFAULT_REFRESH_MAX_AGE_DAYS },
   sources: [],
+  rag: {
+    enabled: false,
+    endpoint: "",
+    model: "",
+    secretRef: "",
+    topK: DEFAULT_RAG_TOP_K,
+    weight: DEFAULT_RAG_WEIGHT,
+  },
 };
 
 function readBool(
@@ -196,6 +229,65 @@ function assertKnownKeys(raw: Record<string, unknown>): void {
       );
     }
   }
+}
+
+function readRag(raw: unknown): RuntimeRagConfig {
+  const fallback = DEFAULT_RUNTIME_CONFIG.rag;
+  if (raw === undefined || raw === null) return { ...fallback };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError("must be an object", "rag");
+  }
+  const record = raw as Record<string, unknown>;
+  const allowed = ["enabled", "endpoint", "model", "secretRef", "topK", "weight"];
+  const unknownKey = Object.keys(record).find((key) => !allowed.includes(key));
+  if (unknownKey) {
+    throw new ConfigError(`accepts only: ${allowed.join(", ")}`, `rag.${unknownKey}`);
+  }
+  const enabled = record["enabled"];
+  if (enabled !== undefined && typeof enabled !== "boolean") {
+    throw new ConfigError("must be a boolean", "rag.enabled");
+  }
+  const endpoint = sourceString(record, "endpoint", "rag.endpoint");
+  const model = sourceString(record, "model", "rag.model");
+  const turnedOn = enabled ?? fallback.enabled;
+  // Enabled without the two things it needs is a configuration that cannot work, so
+  // it is refused here rather than at the first search, where it would look like the
+  // corpus had stopped answering well.
+  if (turnedOn && (!endpoint || !model)) {
+    throw new ConfigError(
+      "requires both `endpoint` and `model` when enabled; without them there is nothing to query",
+      "rag",
+    );
+  }
+  if (endpoint && !/^https?:/.test(endpoint)) {
+    throw new ConfigError("must be an http(s) URL", "rag.endpoint");
+  }
+  const topK = record["topK"];
+  if (topK !== undefined) {
+    if (typeof topK !== "number" || !Number.isFinite(topK)) {
+      throw new ConfigError("must be a finite number", "rag.topK");
+    }
+    if (topK < MIN_RAG_TOP_K || topK > MAX_RAG_TOP_K) {
+      throw new ConfigError(`must be between ${MIN_RAG_TOP_K} and ${MAX_RAG_TOP_K}`, "rag.topK");
+    }
+  }
+  const weight = record["weight"];
+  if (weight !== undefined) {
+    if (typeof weight !== "number" || !Number.isFinite(weight)) {
+      throw new ConfigError("must be a finite number", "rag.weight");
+    }
+    if (weight < MIN_RAG_WEIGHT || weight > MAX_RAG_WEIGHT) {
+      throw new ConfigError(`must be between ${MIN_RAG_WEIGHT} and ${MAX_RAG_WEIGHT}`, "rag.weight");
+    }
+  }
+  return {
+    enabled: turnedOn,
+    endpoint,
+    model,
+    secretRef: sourceString(record, "secretRef", "rag.secretRef"),
+    topK: Math.floor(topK ?? fallback.topK),
+    weight: weight ?? fallback.weight,
+  };
 }
 
 function readRefresh(raw: unknown): RuntimeRefreshConfig {
@@ -370,6 +462,7 @@ export function normalizeConfig(
     enabled: readBool(raw, "enabled", DEFAULT_RUNTIME_CONFIG.enabled),
     refresh: readRefresh(raw["refresh"]),
     sources: readSources(raw["sources"]),
+    rag: readRag(raw["rag"]),
     corpusRoot,
     allowedBundles: readStringArray(raw, "allowedBundles"),
     maxResults: readNumber(

@@ -44,6 +44,13 @@ import { PLUGIN_ID } from "./constants.js";
 import { normalizeConfig, type RuntimeConfig } from "./runtime-config.js";
 import { ACTION_KEYS, DATA_KEYS } from "./plugin-keys.js";
 import {
+  blendWithKeyword,
+  embedQuery,
+  loadIndex,
+  semanticRank,
+  type SemanticCandidate,
+} from "./rag.js";
+import {
   buildRefreshRequest,
   corpusAgeDays,
   shouldRequestRefresh,
@@ -180,7 +187,7 @@ async function handleToolCall(
 
   switch (spec.name) {
     case "search_docs":
-      return searchDocs(store, config, parsed.args);
+      return searchDocs(store, config, parsed.args, semanticProviderFor(ctx, config, config.corpusRoot));
     case "read_doc":
       return readDoc(store, config, parsed.args);
     case "list_docs":
@@ -193,6 +200,61 @@ async function handleToolCall(
       // catalog without a case here.
       return { error: `No handler is implemented for tool "${spec.name}"` };
   }
+}
+
+/**
+ * The semantic retriever, or undefined when the operator has not asked for one.
+ *
+ * Everything here fails soft and says so in the returned `note`: a search answered
+ * by keyword alone is worth incomparably more than an error page, but an operator
+ * who turned semantic retrieval on and silently did not get it has been misled.
+ */
+export function semanticProviderFor(
+  ctx: PluginContext,
+  config: RuntimeConfig,
+  root: string,
+): { rank(query: string): Promise<{ candidates: SemanticCandidate[]; note: string }> } | undefined {
+  if (!config.rag.enabled || !config.rag.endpoint || !config.rag.model) return undefined;
+
+  return {
+    async rank(query: string) {
+      try {
+        const index = await loadIndex(root);
+        if (!index) {
+          return { candidates: [], note: "no vector index is present, so only keyword results are shown" };
+        }
+        if (index.model && index.model !== config.rag.model) {
+          // Different models produce vectors that are not comparable, and the
+          // results would be quietly meaningless rather than absent.
+          return {
+            candidates: [],
+            note: `the index was built with ${index.model} but the configured model is ${config.rag.model}`,
+          };
+        }
+        let key = "";
+        if (config.rag.secretRef) {
+          const resolved = await ctx.secrets.resolve(config.rag.secretRef, {
+            companyId: undefined,
+          } as never);
+          key = typeof resolved === "string" ? resolved : String(resolved ?? "");
+        }
+        const vector = await embedQuery(
+          (url, init) => ctx.http.fetch(url, init as RequestInit),
+          config.rag,
+          query,
+          key,
+        );
+        const candidates = semanticRank(index, vector, config.rag.topK, config.allowedBundles);
+        const partial = index.complete ? "" : " (the index covers only some bundles)";
+        return { candidates, note: `semantic retrieval used ${candidates.length} candidate(s)${partial}` };
+      } catch (error) {
+        return {
+          candidates: [],
+          note: `semantic retrieval is unavailable, so these are keyword results: ${String(error)}`,
+        };
+      }
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

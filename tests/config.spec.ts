@@ -67,6 +67,9 @@ describe("normalizeConfig accepts a full valid document", () => {
       // which is what keeps an older saved config loadable.
       refresh: { enabled: false, maxAgeDays: 30 },
       sources: [],
+      // Semantic retrieval is off unless an endpoint is named; keyword search needs
+      // no configuration at all.
+      rag: { enabled: false, endpoint: "", model: "", secretRef: "", topK: 20, weight: 0.5 },
     });
   });
 
@@ -158,6 +161,7 @@ describe("INSTANCE_CONFIG_SCHEMA", () => {
       "enabled",
       "maxDocChars",
       "maxResults",
+      "rag",
       "refresh",
       "sources",
     ]);

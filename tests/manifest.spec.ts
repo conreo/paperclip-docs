@@ -38,10 +38,13 @@ describe("manifest", () => {
   it("declares exactly the capabilities the plugin uses", () => {
     expect([...manifest.capabilities].sort()).toEqual([
       "agent.tools.register",
+      "http.outbound",
       "instance.settings.register",
       // Writes one request file into a folder the operator declares. The corpus
       // itself is still only read, with `node:fs`.
       "local.folders",
+      // Resolves the embedding key by reference, so the value stays in the host.
+      "secrets.read-ref",
     ]);
   });
 
@@ -52,6 +55,11 @@ describe("manifest", () => {
     // than against a wish.
     const worker = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
     expect(worker).toContain("ctx.localFolders");
+    // The other two are used too, and this is the assertion that keeps that true:
+    // an egress capability granted for a feature that never calls out is a
+    // permission an operator gave for nothing.
+    expect(worker).toContain("ctx.http.fetch");
+    expect(worker).toContain("ctx.secrets.resolve");
     // And that the write goes to a declared folder, not to an arbitrary path.
     expect(manifest.localFolders?.map((folder) => folder.folderKey)).toEqual([REQUESTS_FOLDER_KEY]);
     expect(manifest.localFolders?.[0]?.access).toBe("readWrite");
@@ -120,6 +128,7 @@ describe("manifest", () => {
       "enabled",
       "maxDocChars",
       "maxResults",
+      "rag",
       "refresh",
       "sources",
     ]);

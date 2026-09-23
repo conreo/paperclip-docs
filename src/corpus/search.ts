@@ -258,3 +258,30 @@ export function searchConcepts(
     more: ordered.length > hits.length,
   };
 }
+
+/**
+ * A hit for a concept the keyword pass did not score.
+ *
+ * Semantic retrieval finds pages that share no term with the query — a page saying
+ * "single sign-on" for the query "SSO" — and those have no keyword entry to carry
+ * their snippet, heading and citation. This builds one on the same terms as a
+ * keyword hit, so a semantically-found result is indistinguishable to the caller and
+ * can be read with the concept id it reports.
+ */
+export function hitForConcept(record: ConceptRecord, score: number, query: string): SearchHit {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
+  return {
+    bundle: record.bundle,
+    conceptId: record.conceptId,
+    title: record.title,
+    type: record.type,
+    heading: bestHeading(record, terms),
+    snippet: buildSnippet(record.bodyPreview, terms),
+    resource: record.resource,
+    timestamp: record.timestamp,
+    score: Math.round(score * 100) / 100,
+  };
+}

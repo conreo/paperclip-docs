@@ -39,6 +39,15 @@ const manifest: PaperclipPluginManifestV1 = {
     // declared and contained to a folder the operator chose, rather than being a
     // quiet `node:fs` call. `local.folders` covers exactly that one folder.
     "local.folders",
+    // The optional semantic path calls an embedding endpoint — through the host's
+    // own client, which is the audited route. Node's `fetch` would work without
+    // declaring anything, and that is exactly why it is not used: an undeclared
+    // egress path is the same "third path that nothing governs" this plugin exists
+    // to replace.
+    "http.outbound",
+    // The API key is a reference resolved at call time, so the value stays in the
+    // host and never appears in this plugin's configuration document.
+    "secrets.read-ref",
     // No `jobs.schedule`. A scheduled job is plugin-wide, but this configuration is
     // per-company — so a job could only check every company by reading the company
     // list and depending on each one having configured its request folder. The

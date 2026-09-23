@@ -199,9 +199,20 @@ Other bounds:
 - **Allowlist entries are plain bundle names**, not paths (`n8n/../grafana` is rejected).
 - **Lazy, mtime-invalidated index.** The corpus is walked once and cached against a cheap mtime
   signature. A search does not re-read the corpus from disk per request.
-- **No writes, no state, no network.** The plugin persists nothing, fetches nothing, and declares
-  no state, local-folder, or HTTP capability. Its only capabilities are `agent.tools.register` and
-  `instance.settings.register`. Inspect it before trusting it: that is the whole list.
+- **No writes to the corpus, no state, and no egress unless you ask for it.** The plugin persists
+  nothing of its own, and it never modifies the corpus. Its capabilities are exactly five, and each
+  one is used:
+
+  | Capability | Why |
+  |---|---|
+  | `agent.tools.register` | the four tools |
+  | `instance.settings.register` | the settings page |
+  | `local.folders` | writing a *refresh request* into one folder you declare; the corpus itself is read with `node:fs` |
+  | `http.outbound` | only the optional semantic path, and only when it is switched on |
+  | `secrets.read-ref` | resolving an embedding key by reference, so the value stays in the host |
+
+  Inspect that list before trusting the plugin — it is short on purpose, and a test asserts each one
+  is actually used rather than declared and forgotten.
 
 ### A note on the documentation itself
 
@@ -230,6 +241,55 @@ the package keeps that your call.
 | Search returns nothing useful | Pass `bundle`. With several products in one corpus, an unfiltered query is how you get the wrong product's answer. |
 | `sources` warns the corpus is stale | Nothing is broken; the snapshot is old. Refresh the directory. |
 | A page is missing from results | Pages whose frontmatter does not parse, or with no `type`, are skipped or degraded rather than failing the search. Check the file's frontmatter. |
+
+## Telling it what to build
+
+The plugin **cannot fetch anything**. That is not a limitation it works around: the plugin runtime
+offers no way to spawn a process, so there is no `git`, no `pandoc` and no way to rebuild a corpus
+from inside a worker. What it can do is say what it needs.
+
+So the corpus is built by a **runner on your host** — `fetch.py` and `runner.py` from
+[paperclip-docs-builder](https://github.com/conreo/paperclip-docs-builder) — and this plugin holds
+two things about it: a registry of what you want, and the request that asks for it.
+
+```jsonc
+"sources": [                                // the registry, per organization
+  { "id": "nextcloud", "kind": "git", "repo": "https://github.com/nextcloud/documentation",
+    "ref": "stable30", "include": ["**/*.md"] },
+  { "id": "handbook", "kind": "local", "folder": "/srv/handbook" }   // your own docs, as a bundle
+],
+"refresh": { "enabled": true, "maxAgeDays": 30 }
+```
+
+With `refresh.enabled`, the settings page offers **Request a rebuild now**. It writes
+`request.json` into the folder you declared, and the runner writes `response.json` beside it — which
+this page reads back, so you see the outcome without opening a container log. Staleness is measured
+from the build manifest's date, never from file mtimes: a restore from backup makes every file look
+new, and the corpus would then never be rebuilt.
+
+Agents cannot trigger any of this. The corpus is a trust input — whoever can write it decides what
+every other agent believes — so a refresh is an operator action, and the build is a script with
+pinned versions rather than an agent run with a token.
+
+## Semantic retrieval (optional)
+
+Keyword search is the baseline and needs no configuration. If you want ranking by meaning as well —
+which is what finds a page that says *"single sign-on"* for the query *SSO* — enable it and point it
+at an OpenAI-compatible embeddings endpoint:
+
+```jsonc
+"rag": { "enabled": true, "endpoint": "https://api.example.com/v1/embeddings",
+         "model": "bge-small", "secretRef": "…", "weight": 0.5 }
+```
+
+The corpus needs an index for this, which the builder writes (`embeddings.json` plus a flat float32
+matrix) when you give it the same endpoint. The plugin reads those files and does the arithmetic
+itself; there is no vector database, because a worker that cannot spawn a process cannot host one.
+
+It is designed to fail softly and say so: no index, a different model, an endpoint that is down, an
+index that covers only some bundles — each of those returns keyword results plus a sentence
+explaining what did not happen. An operator who switched this on deserves to know when they did not
+get it.
 
 ## How this differs from the bundled LLM Wiki plugin
 

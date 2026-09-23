@@ -21,7 +21,8 @@ import {
 } from "../constants.js";
 import type { RuntimeConfig } from "../runtime-config.js";
 import { browseCorpus } from "../corpus/browse.js";
-import { searchConcepts } from "../corpus/search.js";
+import { hitForConcept, searchConcepts, type SearchHit } from "../corpus/search.js";
+import { blendWithKeyword } from "../rag.js";
 import { CorpusUnavailable, readConcept, type CorpusStatus, type CorpusStore } from "../corpus/store.js";
 import { stringArg, numberArg } from "./validate.js";
 
@@ -49,10 +50,21 @@ function oneLine(text: string): string {
  * an agent that asks for 500 results gets the operator's ceiling instead, which
  * is the difference between a search and a corpus dump.
  */
+/**
+ * The narrow slice of semantic retrieval this handler needs.
+ *
+ * Injected rather than imported so the handler stays free of HTTP, secrets and the
+ * corpus root, and so a test can hand it a fixed ranking and assert the blend.
+ */
+export interface SemanticRetriever {
+  rank(query: string): Promise<{ candidates: { conceptId: string; score: number }[]; note: string }>;
+}
+
 export async function searchDocs(
   store: CorpusStore,
   config: RuntimeConfig,
   args: Record<string, unknown>,
+  semantic?: SemanticRetriever,
 ): Promise<ToolOutcome> {
   const query = stringArg(args, "query");
   if (query === null) {
@@ -90,11 +102,45 @@ export async function searchDocs(
     allowedBundles: allowed,
   });
 
-  if (outcome.hits.length === 0) {
+  // Semantic retrieval, when the operator turned it on. It contributes candidates
+  // rather than replacing the ranking: a page that says "single sign-on" and never
+  // the letters SSO has no keyword score to be beaten by, and a page that matches
+  // exactly should not be displaced by something merely similar.
+  let hits = outcome.hits;
+  let semanticNote = "";
+  if (semantic) {
+    const ranked = await semantic.rank(query);
+    semanticNote = ranked.note;
+    if (ranked.candidates.length > 0) {
+      const byId = new Map(index.concepts.map((concept) => [concept.conceptId, concept]));
+      const blended = blendWithKeyword(
+        new Map(outcome.hits.map((hit) => [hit.conceptId, hit.score])),
+        ranked.candidates,
+        config.rag.weight,
+      );
+      hits = [...blended.entries()]
+        .map(([conceptId, score]) => {
+          const existing = outcome.hits.find((hit) => hit.conceptId === conceptId);
+          if (existing) return { ...existing, score: Math.round(score * 100) / 100 };
+          const concept = byId.get(conceptId);
+          // A semantic-only candidate still has to obey the caller's bundle and type
+          // filters: retrieval must not become a way around an allowlist.
+          if (!concept) return null;
+          if (bundle !== null && concept.bundle !== bundle) return null;
+          if (type !== null && concept.type !== type) return null;
+          return hitForConcept(concept, score, query);
+        })
+        .filter((hit): hit is SearchHit => hit !== null)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, limit);
+    }
+  }
+
+  if (hits.length === 0) {
     const scope =
       bundle !== null ? ` in bundle "${bundle}"` : "";
     return {
-      content: `No documentation matched "${query}"${scope}. ${outcome.considered} concept(s) were searched. Try fewer or different terms, or call list_docs to browse.`,
+      content: `No documentation matched "${query}"${scope}. ${outcome.considered} concept(s) were searched. Try fewer or different terms, or call list_docs to browse.${semanticNote ? ` (${semanticNote})` : ""}`,
       data: {
         mode: outcome.mode,
         count: 0,
@@ -108,13 +154,13 @@ export async function searchDocs(
 
   const lines: string[] = [];
   lines.push(
-    `${outcome.hits.length} result(s) for "${query}"${
+    `${hits.length} result(s) for "${query}"${
       bundle !== null ? ` in ${bundle}` : ""
     } — matched on ${outcome.mode === "all" ? "ALL" : "ANY"} terms, ranked by field. Corpus: ${index.root}`,
   );
   lines.push("");
 
-  outcome.hits.forEach((hit, position) => {
+  hits.forEach((hit, position) => {
     lines.push(`${position + 1}. ${hit.title}${hit.type ? ` [${hit.type}]` : ""}`);
     lines.push(`   concept_id: ${hit.conceptId}`);
     lines.push(`   bundle: ${hit.bundle} · score: ${hit.score}`);
@@ -132,10 +178,11 @@ export async function searchDocs(
     content: lines.join("\n"),
     data: {
       mode: outcome.mode,
-      count: outcome.hits.length,
+      count: hits.length,
       considered: outcome.considered,
       more: outcome.more,
-      results: outcome.hits,
+      results: hits,
+      semantic: semanticNote || undefined,
       bundleAllowed: true,
     },
   };
