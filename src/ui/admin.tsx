@@ -681,6 +681,36 @@ function Configuration({
     void probeEndpoint();
   }, [draft, probeEndpoint]);
 
+  /**
+   * Ask the runner to rebuild the index without re-fetching the corpus.
+   *
+   * The cheap way back: after a model change, or when a corpus rebuild took the
+   * index with it. Reported the same way the rebuild button reports — the runner's
+   * own reply, not an assumption that the work happened.
+   */
+  const runRebuildIndex = usePluginAction(ACTION_KEYS.rebuildIndex);
+  const [indexBusy, setIndexBusy] = useState(false);
+  const rebuildIndex = useCallback(async () => {
+    setIndexBusy(true);
+    try {
+      const outcome = (await runRebuildIndex({ companyId })) as
+        | { written?: boolean; skipped?: string; path?: string; model?: string }
+        | undefined;
+      if (outcome?.written) {
+        onMessage(
+          `Index rebuild requested for ${outcome.model ?? "the configured model"} (${outcome.path}). Nothing is fetched — the runner embeds the corpus already on this server.`,
+          "success",
+        );
+      } else {
+        onMessage(`No request written: ${outcome?.skipped ?? "the host returned nothing"}`, "error");
+      }
+    } catch (error) {
+      onMessage(sanitizeErrorMessage(error), "error");
+    } finally {
+      setIndexBusy(false);
+    }
+  }, [runRebuildIndex, companyId, onMessage]);
+
   /** Write one change immediately, the way a General settings switch does. */
   const write = useCallback(
     async (edits: Partial<OperatorConfig>, announce?: string) => {
@@ -991,6 +1021,23 @@ function Configuration({
           />
           <span style={styles.hint}>
             Calls the endpoint from the worker with one throwaway string, the same way a search does.
+          </span>
+        </div>
+
+        <div style={styles.row}>
+          <Button
+            label={indexBusy ? "Requesting…" : "Rebuild index"}
+            disabled={
+              indexBusy ||
+              !draft.rag.enabled ||
+              draft.rag.endpoint.trim().length === 0 ||
+              draft.rag.model.trim().length === 0
+            }
+            onClick={() => void rebuildIndex()}
+          />
+          <span style={styles.hint}>
+            Embeds the corpus already on this server. Nothing is fetched, so this is the cheap way
+            back after a model change or a lost index.
           </span>
         </div>
         {probe.state === "ok" ? (

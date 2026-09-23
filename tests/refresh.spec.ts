@@ -99,7 +99,7 @@ describe("when to ask for a rebuild", () => {
 
 describe("the request payload", () => {
   it("is versioned, so a runner can refuse a shape it does not know", () => {
-    const request = buildRefreshRequest("/corpus", [SOURCE], "test", NOW);
+    const request = buildRefreshRequest("/corpus", [SOURCE], "test", { now: NOW });
     expect(request.schema).toBe(REFRESH_REQUEST_SCHEMA);
     expect(request.requestedAt).toBe(NOW.toISOString());
     expect(request.corpusRoot).toBe("/corpus");
@@ -110,13 +110,13 @@ describe("the request payload", () => {
     // The payload is serialized and handed to another process; a later config
     // mutation must not change a request already written.
     const sources = [SOURCE];
-    const request = buildRefreshRequest("/corpus", sources, "test", NOW);
+    const request = buildRefreshRequest("/corpus", sources, "test", { now: NOW });
     sources[0]!.id = "mutated";
     expect(request.sources[0]!.id).toBe("n8n");
   });
 
   it("bounds the reason it carries", () => {
-    const request = buildRefreshRequest("/corpus", [], "x".repeat(5_000), NOW);
+    const request = buildRefreshRequest("/corpus", [], "x".repeat(5_000), { now: NOW });
     expect(request.reason.length).toBe(500);
   });
 });
@@ -127,7 +127,7 @@ describe("writing the request", () => {
     // deployment detail leaking into a settings page — and it showed the plugin as
     // "needs attention" until they picked one.
     const corpus = tempCorpus();
-    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", NOW));
+    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", { now: NOW }));
     expect(outcome).toEqual({ written: true, path: path.join(`${corpus}.requests`, REQUEST_FILENAME) });
     expect(requestsDirFor(corpus)).toBe(`${corpus}.requests`);
     // A sibling, never inside: the corpus is replaced by a rename on every rebuild,
@@ -141,7 +141,7 @@ describe("writing the request", () => {
 
   it("creates the directory and leaves no temporary file behind", async () => {
     const corpus = tempCorpus();
-    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", NOW));
+    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", { now: NOW }));
     const dir = requestsDirFor(corpus);
     expect(fs.readdirSync(dir)).toEqual([REQUEST_FILENAME]);
     // Written to a temp name and renamed, so a runner polling the directory cannot
@@ -157,7 +157,7 @@ describe("writing the request", () => {
     const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "docs-blocked-")), "file");
     fs.writeFileSync(blocker, "not a directory");
     const corpus = path.join(blocker, "okf-bundles");
-    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "r", NOW));
+    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "r", { now: NOW }));
     expect(outcome.written).toBe(false);
     expect(outcome.written === false && outcome.skipped).toContain("could not be written");
     fs.rmSync(path.dirname(blocker), { recursive: true, force: true });
@@ -167,7 +167,7 @@ describe("writing the request", () => {
     const corpus = tempCorpus();
     expect(await readRefreshResponse(corpus)).toBeNull();
 
-    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "why", NOW));
+    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "why", { now: NOW }));
     fs.writeFileSync(
       path.join(requestsDirFor(corpus), RESPONSE_FILENAME),
       JSON.stringify({ status: "built", pages: 4320 }),
@@ -178,5 +178,48 @@ describe("writing the request", () => {
     fs.writeFileSync(path.join(requestsDirFor(corpus), RESPONSE_FILENAME), "{not json");
     expect(await readRefreshResponse(corpus)).toBeNull();
     fs.rmSync(path.dirname(corpus), { recursive: true, force: true });
+  });
+});
+describe("what a request asks the runner for", () => {
+  it("asks for the corpus alone by default, and carries no embed block", () => {
+    const request = buildRefreshRequest("/corpus", [SOURCE], "test", { now: NOW });
+    expect(request.mode).toBe("okf");
+    expect(request.embed).toBeUndefined();
+  });
+
+  it("asks for both when an embedding endpoint is configured", () => {
+    // A corpus rebuild replaces the directory the index lives in, so the request that
+    // refreshes the corpus is also the one that has to rebuild the index.
+    const request = buildRefreshRequest("/corpus", [SOURCE], "test", {
+      now: NOW,
+      embed: { endpoint: "http://127.0.0.1:11434/v1/embeddings", model: "nomic-embed-text" },
+    });
+    expect(request.mode).toBe("both");
+    expect(request.embed).toEqual({
+      endpoint: "http://127.0.0.1:11434/v1/embeddings",
+      model: "nomic-embed-text",
+    });
+  });
+
+  it("rebuilds an index with no sources at all, because none are needed", () => {
+    const request = buildRefreshRequest("/corpus", [], "test", {
+      now: NOW,
+      mode: "index",
+      embed: { endpoint: "http://127.0.0.1:11434/v1/embeddings", model: "m" },
+    });
+    expect(request.mode).toBe("index");
+    expect(request.sources).toEqual([]);
+    expect(request.embed?.model).toBe("m");
+  });
+
+  it("never attaches an embed block to a corpus-only request", () => {
+    // The runner refuses `okf` with an embed block, and a request the runner refuses
+    // is worse than one that asks for less.
+    const request = buildRefreshRequest("/corpus", [SOURCE], "test", {
+      now: NOW,
+      mode: "okf",
+      embed: { endpoint: "http://127.0.0.1:11434/v1/embeddings", model: "m" },
+    });
+    expect(request.embed).toBeUndefined();
   });
 });

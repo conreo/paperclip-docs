@@ -60,6 +60,7 @@ import {
   readRefreshResponse,
   shouldRequestRefresh,
   writeRefreshRequest,
+  type RequestEmbed,
 } from "./refresh.js";
 import { CorpusStore } from "./corpus/store.js";
 import { DOC_TOOL_SPECS, toJsonSchema, type DocToolSpec } from "./tools/catalog.js";
@@ -144,9 +145,28 @@ async function loadConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Index-build progress
+// Requests to the host
 // ---------------------------------------------------------------------------
 
+/**
+ * The embedding settings a request should carry, or null when there is nothing to
+ * embed with.
+ *
+ * Deliberately strict: a request that names a mode needing an endpoint and then
+ * omits it is refused by the runner, which turns a settings mistake into a failed
+ * build. Asking for less is always the safer request.
+ */
+function ragEmbed(rag: RuntimeConfig["rag"]): RequestEmbed | null {
+  if (!rag.enabled) return null;
+  const endpoint = rag.endpoint.trim();
+  const model = rag.model.trim();
+  if (endpoint.length === 0 || model.length === 0) return null;
+  return { endpoint, model };
+}
+
+// ---------------------------------------------------------------------------
+// Index-build progress
+// ---------------------------------------------------------------------------
 /**
  * Read the indexer's journal, so the settings page can show a build happening.
  *
@@ -352,6 +372,7 @@ const plugin = definePlugin({
           return { written: false, skipped: `the configuration could not be read: ${scopedError}` };
         }
         const status = await store.describe(scoped.corpusRoot);
+        const embed = ragEmbed(scoped.rag);
         const ageDays = corpusAgeDays(status.manifest, new Date());
         // An operator pressing the button is not subject to the age limit: they
         // asked. The limit exists so the *schedule* does not ask too often, and it
@@ -369,13 +390,23 @@ const plugin = definePlugin({
             scoped.corpusRoot,
             scoped.sources,
             `requested from the settings page; ${decision.reason}`,
+            // Semantic retrieval rides along when it is on: a corpus rebuild replaces
+            // the directory the index lives in, so asking for the corpus alone would
+            // discard the index on every refresh.
+            embed ? { mode: "both", embed } : { mode: "okf" },
           ),
         );
         ctx.logger.info("paperclip-docs refresh request", { companyId, ...outcome });
         // The runner's reply, when there is one, so pressing the button reports what
         // the last build actually did rather than only that a file was written.
         const response = await readRefreshResponse(scoped.corpusRoot);
-        return { ...outcome, ageDays, policy: decision.reason, lastBuild: response };
+        return {
+          ...outcome,
+          ageDays,
+          policy: decision.reason,
+          mode: embed ? "both" : "okf",
+          lastBuild: response,
+        };
       });
       actionsFor(ctx).add(ACTION_KEYS.requestRefresh);
     }
@@ -458,6 +489,55 @@ const plugin = definePlugin({
         }
       });
       actionsFor(ctx).add(ACTION_KEYS.validateRag);
+    }
+
+    /**
+     * Rebuild the vector index from the corpus already on disk.
+     *
+     * The runner honours this with `--index-only`, which reads the corpus and touches
+     * no network — so an index can be rebuilt after the sources that built the corpus
+     * have moved, changed shape, or been taken out of the registry, and an operator
+     * who has just changed the model does not have to re-download the documentation
+     * to get ranking back.
+     */
+    if (!actionsFor(ctx).has(ACTION_KEYS.rebuildIndex)) {
+      ctx.actions.register(ACTION_KEYS.rebuildIndex, async (params) => {
+        const companyId =
+          typeof params?.["companyId"] === "string" && params["companyId"].trim().length > 0
+            ? params["companyId"].trim()
+            : "";
+        if (!companyId) {
+          return { written: false, skipped: "no company scope on this action" };
+        }
+        const { config: scoped, error: scopedError } = await loadConfig(ctx, companyId);
+        if (scopedError) {
+          return { written: false, skipped: `the configuration could not be read: ${scopedError}` };
+        }
+        if (scoped.corpusRoot.trim().length === 0) {
+          return { written: false, skipped: "no corpus is configured for this organization" };
+        }
+        const embed = ragEmbed(scoped.rag);
+        if (!embed) {
+          return {
+            written: false,
+            skipped:
+              "semantic retrieval has no endpoint and model configured, so there is nothing to embed with",
+          };
+        }
+        const outcome = await writeRefreshRequest(
+          scoped.corpusRoot,
+          buildRefreshRequest(
+            scoped.corpusRoot,
+            scoped.sources,
+            "index rebuild requested from the settings page; the corpus is not re-fetched",
+            { mode: "index", embed },
+          ),
+        );
+        ctx.logger.info("paperclip-docs index rebuild request", { companyId, ...outcome });
+        const response = await readRefreshResponse(scoped.corpusRoot);
+        return { ...outcome, model: embed.model, lastBuild: response };
+      });
+      actionsFor(ctx).add(ACTION_KEYS.rebuildIndex);
     }
 
     // -----------------------------------------------------------------

@@ -55,6 +55,18 @@ export const ACTION_KEYS = {
    * the page would prove a different thing.
    */
   validateRag: "validate-rag",
+
+  /**
+   * Rebuild the vector index from the corpus already on disk.
+   *
+   * Separate from a rebuild request on purpose. A corpus rebuild re-fetches every
+   * source and takes as long as the slowest upstream; this writes a request the
+   * runner honours with `--index-only`, which reads the corpus and touches no
+   * network. An operator who has just changed the model — or whose index was lost
+   * with the corpus directory — should not have to re-download the documentation to
+   * get semantic ranking back.
+   */
+  rebuildIndex: "rebuild-index",
 } as const;
 
 /**

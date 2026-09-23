@@ -30,6 +30,15 @@ import path from "node:path";
 import { MAX_ARG_STRING_CHARS, REQUEST_FILENAME, RESPONSE_FILENAME } from "./constants.js";
 import type { RuntimeSourceDeclaration } from "./runtime-config.js";
 
+/** Which half of the pipeline a request asks for. */
+export type RequestMode = "okf" | "index" | "both";
+
+/** The embedding settings a request carries, when it is allowed to embed. */
+export interface RequestEmbed {
+  endpoint: string;
+  model: string;
+}
+
 /** The on-disk request the host runner reads. */
 export interface RefreshRequest {
   /** Bumped when the shape changes; the runner refuses what it does not know. */
@@ -39,8 +48,22 @@ export interface RefreshRequest {
   reason: string;
   /** Where the built corpus belongs. */
   corpusRoot: string;
+  /**
+   * Which half of the pipeline to run.
+   *
+   * `index` rebuilds the vector index from the corpus already on disk and fetches
+   * nothing — which is the point: an index has to be rebuildable after the sources
+   * that built the corpus have moved, changed shape, or been removed.
+   */
+  mode: RequestMode;
   /** The registry the operator declared for this company. */
   sources: RuntimeSourceDeclaration[];
+  /**
+   * Present only when semantic retrieval is configured. A corpus rebuild replaces
+   * the corpus directory, and the index lives inside it, so a `both` request is how
+   * a rebuild avoids throwing the index away.
+   */
+  embed?: RequestEmbed;
 }
 
 /**
@@ -101,16 +124,25 @@ export function buildRefreshRequest(
   corpusRoot: string,
   sources: RuntimeSourceDeclaration[],
   reason: string,
-  now: Date = new Date(),
+  options: { mode?: RequestMode; embed?: RequestEmbed; now?: Date } = {},
 ): RefreshRequest {
-  return {
+  const mode: RequestMode = options.mode ?? (options.embed ? "both" : "okf");
+  const request: RefreshRequest = {
     schema: 1,
-    requestedAt: now.toISOString(),
+    requestedAt: (options.now ?? new Date()).toISOString(),
     reason: reason.slice(0, 500),
     corpusRoot,
+    mode,
     // Copied, not referenced: this is serialized and handed to another process.
     sources: sources.map((source) => ({ ...source })),
   };
+  // Only a mode that embeds carries the settings: a request the runner would refuse
+  // is worse than one that asks for less, and `okf` with an embed block is exactly
+  // that ambiguity.
+  if (options.embed && mode !== "okf") {
+    request.embed = { endpoint: options.embed.endpoint, model: options.embed.model };
+  }
+  return request;
 }
 
 export type RequestOutcome =
