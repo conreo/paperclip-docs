@@ -30,7 +30,7 @@ describe("manifest", () => {
     // Kept as a literal on purpose: it forces a version bump to be a deliberate edit
     // here as well as in package.json, and the two drifting apart is exactly what
     // this catches.
-    expect(manifest.version).toBe("0.2.3");
+    expect(manifest.version).toBe("0.2.4");
     expect(manifest.version).toBe(
       JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version,
     );

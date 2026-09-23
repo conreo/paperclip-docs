@@ -45,6 +45,7 @@ import { normalizeConfig, type RuntimeConfig } from "./runtime-config.js";
 import { ACTION_KEYS, DATA_KEYS } from "./plugin-keys.js";
 import {
   blendWithKeyword,
+  describeIndex,
   embedQuery,
   loadIndex,
   semanticRank,
@@ -361,9 +362,14 @@ const plugin = definePlugin({
           : undefined;
       const { config: scoped, error: scopedError } = await loadConfig(ctx, companyId);
       const status = await store.describe(scoped.corpusRoot);
+      // Whether semantic retrieval *can* work is a fact about the corpus, not about
+      // the settings, so it is reported here rather than left for the operator to
+      // infer from a switch that is on and a search that quietly is not semantic.
+      const embeddings = await describeIndex(scoped.corpusRoot);
       return {
         ...statusPayload(status, scoped, scoped.enabled),
         configError: scopedError,
+        embeddings,
       };
     });
   },

@@ -12,7 +12,7 @@
 export const PLUGIN_ID = "paperclip-docs";
 
 /** Manifest version; keep in sync with package.json. */
-export const PLUGIN_VERSION = "0.2.3";
+export const PLUGIN_VERSION = "0.2.4";
 
 /**
  * Where the corpus lives when the operator has not said otherwise.

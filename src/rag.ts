@@ -42,6 +42,48 @@ export interface EmbeddingIndex {
   vectors: Float32Array;
 }
 
+/** What the index says about itself, read without loading the matrix. */
+export interface EmbeddingIndexSummary {
+  model: string;
+  dim: number;
+  count: number;
+  complete: boolean;
+  bundles: string[];
+  builtAt: string;
+}
+
+/**
+ * Read only the index's metadata.
+ *
+ * Separate from {@link loadIndex} because the settings page needs to say whether
+ * semantic retrieval *can* work — and loading a multi-megabyte matrix to answer that
+ * would be absurd. This is one small JSON read.
+ */
+export async function describeIndex(root: string): Promise<EmbeddingIndexSummary | null> {
+  try {
+    const raw = await fs.readFile(path.join(root, EMBEDDINGS_JSON), "utf8");
+    const meta = JSON.parse(raw) as unknown;
+    if (typeof meta !== "object" || meta === null) return null;
+    const record = meta as Record<string, unknown>;
+    if (record["schema"] !== EMBEDDINGS_SCHEMA) return null;
+    const count = record["count"];
+    const dim = record["dim"];
+    if (typeof count !== "number" || typeof dim !== "number") return null;
+    return {
+      model: typeof record["model"] === "string" ? record["model"] : "",
+      dim,
+      count,
+      complete: record["complete"] !== false,
+      bundles: Array.isArray(record["bundles"])
+        ? record["bundles"].filter((b): b is string => typeof b === "string")
+        : [],
+      builtAt: typeof record["built_at"] === "string" ? record["built_at"] : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** One semantic candidate, in the shape search results use. */
 export interface SemanticCandidate {
   conceptId: string;

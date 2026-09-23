@@ -256,6 +256,8 @@ export const styles: Record<string, CSSProperties> = {
   // asking them to transcribe.
   bundleList: { listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 8 },
   bundleRow: { display: "flex", alignItems: "center", gap: 8 },
+  // `bundleCount` already exists above, for the same purpose in the status list.
+  bundleLabel: { fontSize: 13.5, fontWeight: 500 },
   // Tuning lives behind one disclosure so the page opens on the two things an
   // operator comes for: is it working, and who may read it.
   disclosure: { marginTop: 4 },

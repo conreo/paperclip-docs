@@ -17,6 +17,7 @@ import { EMBEDDINGS_BIN, EMBEDDINGS_JSON } from "../src/constants.js";
 import {
   blendWithKeyword,
   cosine,
+  describeIndex,
   embedQuery,
   invalidateIndex,
   loadIndex,
@@ -311,5 +312,34 @@ describe("the provider degrades rather than failing", () => {
     const { candidates, note } = await provider!.rank("q");
     expect(candidates[0]?.conceptId).toBe("a/close.md");
     expect(note).toContain("semantic retrieval used");
+  });
+});
+
+describe("describing the index to the settings page", () => {
+  it("reports the model, size and completeness without loading the matrix", async () => {
+    // The page has to say whether semantic retrieval can work at all. Loading a
+    // multi-megabyte matrix to answer that would be absurd, so this reads the small
+    // JSON and nothing else.
+    const root = writeIndex(
+      [
+        { id: "a/one.md", vector: [1, 0, 0] },
+        { id: "a/two.md", vector: [0, 1, 0] },
+      ],
+      { model: "bge-small", complete: false },
+    );
+    const summary = await describeIndex(root);
+    expect(summary).toMatchObject({ model: "bge-small", count: 2, dim: 3, complete: false });
+    expect(summary?.bundles).toEqual(["a"]);
+  });
+
+  it("is null when there is no index, which is the honest answer", async () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "docs-noindex-"));
+    roots.push(empty);
+    expect(await describeIndex(empty)).toBeNull();
+  });
+
+  it("is null for an index from a schema it does not know", async () => {
+    const root = writeIndex([{ id: "a/one.md", vector: [1, 0] }], { schema: 99 });
+    expect(await describeIndex(root)).toBeNull();
   });
 });

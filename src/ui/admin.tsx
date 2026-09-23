@@ -59,6 +59,15 @@ interface CorpusStatus {
   allowedBundles: string[];
   error: string | null;
   configError?: string | null;
+  /** Present when the builder wrote a vector index; null when there is none. */
+  embeddings: {
+    model: string;
+    dim: number;
+    count: number;
+    complete: boolean;
+    bundles: string[];
+    builtAt: string;
+  } | null;
 }
 
 type Tone = PluginToastTone;
@@ -206,6 +215,7 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
         // inventory is passed in rather than left to the placeholder — which used
         // to name products from a different corpus entirely.
         availableBundles={status?.bundles ?? []}
+        embeddings={status?.embeddings ?? null}
       />
     </div>
   );
@@ -290,11 +300,13 @@ function Configuration({
   onSaved,
   onMessage,
   availableBundles,
+  embeddings,
 }: {
   companyId: string;
   onSaved: () => void;
   onMessage: Notify;
   availableBundles: Array<{ name: string; conceptCount: number }>;
+  embeddings: CorpusStatus["embeddings"];
 }) {
   const path = `/api/plugins/${PLUGIN_ID}/config?companyId=${encodeURIComponent(companyId)}`;
   const [stored, setStored] = useState<Record<string, unknown> | null>(null);
@@ -472,6 +484,13 @@ function Configuration({
                       )
                     }
                   />
+                  {/* Rendered, not only announced. The host's switch takes its text
+                      as an aria-label, so a list of them without this is a column of
+                      unnamed toggles — which is exactly what it looked like. */}
+                  <span style={styles.bundleLabel}>{bundle.name}</span>
+                  <span style={styles.bundleCount}>
+                    {bundle.conceptCount} {bundle.conceptCount === 1 ? "page" : "pages"}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -536,8 +555,23 @@ function Configuration({
 
       <Section
         title="Semantic retrieval"
-        description={'Off by default. Keyword search stays the baseline — this adds ranking by meaning, which is what finds a page that says "single sign-on" and never the letters SSO. Every failure falls back to keyword results and says so.'}
+        description={'Ranking by meaning, on top of keyword search rather than instead of it. Keyword search needs none of this and stays the baseline. What it buys: a page that says "single sign-on" is found by the query SSO, which no amount of keyword tuning will do.'}
       >
+        <p style={styles.fieldHint}>
+          {embeddings
+            ? `The corpus has an index: ${embeddings.count.toLocaleString()} vectors of ${
+                embeddings.dim
+              } dimensions, from ${embeddings.model}${
+                embeddings.builtAt ? `, built ${embeddings.builtAt}` : ""
+              }${embeddings.complete ? "" : " — covering only some bundles"}.`
+            : "The corpus has no index, so this cannot work yet. The index is not built here: it is written by the builder on your host when it is given an embedding endpoint, and the plugin only reads it."}
+        </p>
+        <p style={styles.fieldHint}>
+          These settings control the *query*: which endpoint embeds the text an agent
+          searches for, and how much the semantic ranking counts against the keyword one.
+          The index itself — which model, which pages — is decided where the corpus is
+          built, so changing the model here does not rebuild anything.
+        </p>
         <Switch
           checked={draft.rag.enabled}
           disabled={busy}
