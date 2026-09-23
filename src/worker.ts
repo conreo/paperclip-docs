@@ -31,8 +31,10 @@
  *
  * One `CorpusStore` per worker process is the only mutable state. It holds the
  * parsed index and its mtime signature; nothing else survives a request, and
- * nothing is written anywhere. `registeredTools` exists because the host can call
- * `setup()` more than once and `ctx.tools.register` is not idempotent.
+ * nothing is written anywhere. Two small sets track registration, because the host
+ * can call `setup()` more than once and `ctx.tools.register` is not idempotent:
+ * one keyed by context to decide whether to register, one flat set to report what
+ * this plugin offers.
  */
 
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
@@ -52,8 +54,35 @@ import { validateArguments } from "./tools/validate.js";
 
 const store = new CorpusStore();
 
-/** Tool names registered in this worker instance; registration is not idempotent. */
+/**
+ * Tool names this worker has registered, for health and logging.
+ *
+ * A plain set for reporting; the *guard* against double registration is per
+ * context, below.
+ */
 const registeredTools = new Set<string>();
+
+/**
+ * Which tools each context has already been given.
+ *
+ * `ctx.tools.register` is not idempotent, so a second `setup()` on the **same**
+ * context must not register twice. But a *different* context has its own, empty
+ * tool registry — and a module-level guard cannot tell the two apart, so it would
+ * skip registration and leave that context with no tools at all. That failure is
+ * invisible in production, where each worker process gets exactly one context, and
+ * immediate under the host's test harness, which boots a fresh context per test.
+ *
+ * Keyed weakly so a context that goes away is not kept alive by this map.
+ */
+const registeredByContext = new WeakMap<object, Set<string>>();
+
+function toolsFor(ctx: object): Set<string> {
+  const existing = registeredByContext.get(ctx);
+  if (existing) return existing;
+  const created = new Set<string>();
+  registeredByContext.set(ctx, created);
+  return created;
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -168,8 +197,9 @@ const plugin = definePlugin({
       );
     }
 
+    const alreadyRegistered = toolsFor(ctx);
     for (const spec of DOC_TOOL_SPECS) {
-      if (registeredTools.has(spec.name)) continue;
+      if (alreadyRegistered.has(spec.name)) continue;
       ctx.tools.register(
         spec.name,
         {
@@ -180,6 +210,7 @@ const plugin = definePlugin({
         async (params, runCtx): Promise<ToolResult> =>
           handleToolCall(ctx, spec, params, runCtx),
       );
+      alreadyRegistered.add(spec.name);
       registeredTools.add(spec.name);
     }
 
