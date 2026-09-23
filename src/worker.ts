@@ -39,10 +39,13 @@
 
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext, ToolResult, ToolRunContext } from "@paperclipai/plugin-sdk";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { PLUGIN_ID } from "./constants.js";
 import { normalizeConfig, type RuntimeConfig } from "./runtime-config.js";
 import { ACTION_KEYS, DATA_KEYS } from "./plugin-keys.js";
+import { countJournalEntries, describeBuild, EMBEDDINGS_JOURNAL } from "./index-build.js";
 import {
   blendWithKeyword,
   describeIndex,
@@ -137,6 +140,40 @@ async function loadConfig(
           ? `Plugin configuration is invalid: ${error.message}`
           : "Plugin configuration is invalid",
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Index-build progress
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the indexer's journal, so the settings page can show a build happening.
+ *
+ * The indexer runs on the host and cannot report to the plugin, but it is
+ * resumable and therefore keeps a journal beside the corpus. Two reads — the
+ * journal's line count and its mtime — are enough to render a progress bar, and
+ * a stale journal is reported as an interrupted build rather than as progress.
+ *
+ * Failure is not an error here: no journal is the normal state of a corpus whose
+ * index is already built.
+ */
+async function readBuildProgress(root: string, total: number) {
+  try {
+    const journal = path.join(root, EMBEDDINGS_JOURNAL);
+    const [contents, stats] = await Promise.all([
+      fs.readFile(journal, "utf8"),
+      fs.stat(journal),
+    ]);
+    const index = await describeIndex(root);
+    return describeBuild({
+      done: countJournalEntries(contents),
+      total,
+      updatedAtMs: stats.mtimeMs,
+      hasIndex: index !== null,
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -343,6 +380,86 @@ const plugin = definePlugin({
       actionsFor(ctx).add(ACTION_KEYS.requestRefresh);
     }
 
+    /**
+     * Prove the embedding endpoint before semantic retrieval is switched on.
+     *
+     * The probe goes through the worker — the same `ctx.http.fetch` the query path
+     * uses — so a pass means "search will be able to embed its query", which a
+     * check from the browser could not establish. It also reports whether the
+     * configured model matches the index already on disk, because vectors from two
+     * models are not comparable and the failure is silent otherwise.
+     */
+    if (!actionsFor(ctx).has(ACTION_KEYS.validateRag)) {
+      ctx.actions.register(ACTION_KEYS.validateRag, async (params) => {
+        const asText = (value: unknown): string =>
+          typeof value === "string" ? value.trim() : "";
+        const companyId = asText(params?.["companyId"]);
+        const endpoint = asText(params?.["endpoint"]);
+        const model = asText(params?.["model"]);
+        const secretRef = asText(params?.["secretRef"]);
+
+        if (!endpoint) return { ok: false, error: "No embeddings endpoint is set." };
+        if (!/^https?:\/\//i.test(endpoint)) {
+          return { ok: false, error: "The endpoint must be an http:// or https:// URL." };
+        }
+        if (!model) return { ok: false, error: "No embedding model is set." };
+
+        const { config } = await loadConfig(ctx, companyId || undefined);
+        let key = "";
+        if (secretRef) {
+          try {
+            const resolved = await ctx.secrets.resolve(secretRef, { companyId: undefined } as never);
+            key = typeof resolved === "string" ? resolved : String(resolved ?? "");
+          } catch (error) {
+            return {
+              ok: false,
+              error: `The API key "${secretRef}" could not be read: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            };
+          }
+        }
+
+        const started = Date.now();
+        try {
+          const vector = await embedQuery(
+            (url, init) => ctx.http.fetch(url, init as RequestInit),
+            { ...config.rag, endpoint, model },
+            "paperclip-docs endpoint check",
+            key,
+          );
+          const index = await describeIndex(config.corpusRoot);
+          ctx.logger.info("paperclip-docs embedding endpoint validated", {
+            companyId,
+            endpoint,
+            model,
+            dim: vector.length,
+          });
+          return {
+            ok: true,
+            dim: vector.length,
+            ms: Date.now() - started,
+            index: index
+              ? {
+                  model: index.model,
+                  dim: index.dim,
+                  count: index.count,
+                  complete: index.complete,
+                }
+              : null,
+            matchesIndex:
+              index === null ? null : index.model === model && index.dim === vector.length,
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      });
+      actionsFor(ctx).add(ACTION_KEYS.validateRag);
+    }
+
     // -----------------------------------------------------------------
     // Data handlers — the settings page's read-only view of the corpus.
     // -----------------------------------------------------------------
@@ -366,10 +483,15 @@ const plugin = definePlugin({
       // the settings, so it is reported here rather than left for the operator to
       // infer from a switch that is on and a search that quietly is not semantic.
       const embeddings = await describeIndex(scoped.corpusRoot);
+      // A build in flight is a fact about the corpus too, and the page is the only
+      // place an operator can see one: the indexer runs on the host and is silent
+      // between "started" and "wrote embeddings.json".
+      const build = await readBuildProgress(scoped.corpusRoot, status.totalConcepts);
       return {
         ...statusPayload(status, scoped, scoped.enabled),
         configError: scopedError,
         embeddings,
+        build,
       };
     });
   },

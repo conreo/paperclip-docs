@@ -23,7 +23,7 @@
  * is in it, and how old is it — before it shows a single control.
  */
 
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   usePluginAction,
   usePluginData,
@@ -41,6 +41,18 @@ import {
   type OperatorConfig,
 } from "../config.js";
 import { sanitizeErrorMessage } from "../errors.js";
+import { describeIndexLine, type BuildProgress } from "../index-build.js";
+import {
+  buildCompanyBindingBody,
+  buildProfileCreateBody,
+  buildProfileEntryBody,
+  findProfileId,
+  isAlreadyExistsMessage,
+  profileEntriesPath,
+  profilesPath,
+  summarizeGrant,
+  type GrantState,
+} from "../grant.js";
 import { ACTION_KEYS, DATA_KEYS } from "../plugin-keys.js";
 import { StatusLine, styles, thumbTransform } from "./chrome.js";
 
@@ -68,6 +80,8 @@ interface CorpusStatus {
     bundles: string[];
     builtAt: string;
   } | null;
+  /** An index build in flight, read from the indexer's own journal. */
+  build: BuildProgress | null;
 }
 
 type Tone = PluginToastTone;
@@ -207,6 +221,8 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
         )}
       </Section>
 
+      <ToolsGrant companyId={companyId} onMessage={notify} />
+
       <Configuration
         companyId={companyId}
         onSaved={refresh}
@@ -216,8 +232,167 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
         // to name products from a different corpus entirely.
         availableBundles={status?.bundles ?? []}
         embeddings={status?.embeddings ?? null}
+        build={status?.build ?? null}
       />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent access
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether an agent may actually call the tools.
+ *
+ * Registration is not access. Paperclip refuses a plugin tool until a tool
+ * profile names it, and a manifest cannot declare that access — so the reference
+ * CodeGraph plugin ships a "Make the tools callable" action and this plugin, until
+ * now, shipped nothing. The four tools were registered, the corpus was found,
+ * enabled, full and fresh, and every other line on this page was green for a week
+ * while every call was refused: those indicators answer "does the plugin work",
+ * and this one answers "may an agent use it".
+ *
+ * The button creates this plugin's own company-scoped profile and binds it. It
+ * only ever adds: an existing profile is reused, and a complete grant is left
+ * alone.
+ */
+function ToolsGrant({ companyId, onMessage }: { companyId: string; onMessage: Notify }) {
+  const [state, setState] = useState<GrantState | null>(null);
+  const [reading, setReading] = useState(true);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const read = useCallback(async () => {
+    setReading(true);
+    try {
+      setState(summarizeGrant(await coreApi(profilesPath(companyId))));
+      setReadError(null);
+    } catch (cause) {
+      setState(null);
+      setReadError(sanitizeErrorMessage(cause));
+    } finally {
+      setReading(false);
+    }
+  }, [companyId]);
+
+  useEffect(() => {
+    void read();
+  }, [read]);
+
+  const grant = useCallback(async () => {
+    setBusy(true);
+    try {
+      const collection = profilesPath(companyId);
+      let profileId = state?.profileId ?? null;
+      let reused = false;
+
+      if (!profileId) {
+        try {
+          const created = await coreApi<{ id?: unknown }>(collection, {
+            method: "POST",
+            body: buildProfileCreateBody(),
+          });
+          profileId = typeof created?.id === "string" && created.id.length > 0 ? created.id : null;
+        } catch (cause) {
+          const text = cause instanceof Error ? cause.message : String(cause);
+          if (!isAlreadyExistsMessage(text)) throw cause;
+          reused = true;
+          profileId = findProfileId(await coreApi(collection));
+        }
+        if (!profileId) {
+          throw new Error("The profile exists but its id could not be read back from the board.");
+        }
+      }
+
+      // A profile that already exists but is missing tools is repaired one entry
+      // at a time. A partial grant is exactly the state that used to look fine
+      // here, so it is worth being able to fix without deleting anything.
+      if (reused) {
+        for (const toolName of state?.missing ?? []) {
+          try {
+            await coreApi(profileEntriesPath(profileId), {
+              method: "POST",
+              body: buildProfileEntryBody(toolName),
+            });
+          } catch (cause) {
+            const text = cause instanceof Error ? cause.message : String(cause);
+            if (!isAlreadyExistsMessage(text)) throw cause;
+          }
+        }
+      }
+
+      try {
+        await coreApi(`${collection}/${profileId}/bind`, {
+          method: "POST",
+          body: buildCompanyBindingBody(companyId),
+        });
+      } catch (cause) {
+        const text = cause instanceof Error ? cause.message : String(cause);
+        if (!isAlreadyExistsMessage(text)) throw cause;
+      }
+
+      await read();
+      onMessage(
+        "The four documentation tools are now callable by this organization's agents.",
+        "success",
+      );
+    } catch (cause) {
+      onMessage(`Could not make the tools callable: ${sanitizeErrorMessage(cause)}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }, [companyId, onMessage, read, state?.missing, state?.profileId]);
+
+  const complete = state?.complete === true;
+  const missing = state?.missing ?? [];
+
+  return (
+    <Section
+      title="Agent access"
+      description="Whether an agent may actually call these tools. Registration is not access: Paperclip refuses a plugin tool until a tool profile names it, and nothing grants these four by default."
+    >
+      {reading && !state ? (
+        <p style={styles.muted}>Checking what agents may call…</p>
+      ) : readError ? (
+        <div style={styles.errorBanner}>Could not read the tool profile: {readError}</div>
+      ) : (
+        <ul style={styles.list}>
+          <StatusLine
+            ok={complete}
+            good="All four tools are callable by this organization's agents"
+            bad={
+              missing.length === 0
+                ? "No profile grants these tools, so every call is refused"
+                : `${missing.length} of 4 tools are not granted (${missing
+                    .map((tool) => tool.replace(`${PLUGIN_ID}:`, ""))
+                    .join(", ")}) — an agent calling one is refused`
+            }
+          />
+          {state && state.granted.length > 0 ? (
+            <p style={styles.note}>
+              Granted:{" "}
+              {state.granted.map((tool) => tool.replace(`${PLUGIN_ID}:`, "")).join(", ")}.
+              {state.profileId ? ` Profile ${state.profileId}.` : ""}
+            </p>
+          ) : null}
+        </ul>
+      )}
+
+      {complete ? null : (
+        <div style={styles.row}>
+          <Button
+            label={busy ? "Granting…" : "Make the tools callable"}
+            disabled={busy || reading}
+            onClick={() => void grant()}
+          />
+          <span style={styles.hint}>
+            Creates a company-scoped &ldquo;Docs (read-only)&rdquo; profile and binds it. Safe to run
+            twice — it reuses what it already made, and never takes a tool away.
+          </span>
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -250,6 +425,66 @@ function Section({
     </section>
   );
 }
+
+/**
+ * A group of sections under one idea — OKF, RAG.
+ *
+ * The page had grown a flat list where the corpus and the ranking settings sat
+ * next to each other with no marker, and the semantic settings were inside an
+ * "Advanced" disclosure. Grouping them is the difference between "here are eleven
+ * settings" and "here is the corpus, and here is the optional ranking on top of it".
+ */
+function GroupHeading({ title, description }: { title: string; description: string }) {
+  return (
+    <div style={groupStyles.heading}>
+      <h2 style={groupStyles.title}>{title}</h2>
+      <p style={groupStyles.body}>{description}</p>
+    </div>
+  );
+}
+
+const groupStyles: Record<string, CSSProperties> = {
+  heading: { display: "flex", flexDirection: "column", gap: 4, marginTop: 8 },
+  title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", margin: 0 },
+  body: { fontSize: 14, color: "var(--muted-foreground, #667085)", margin: 0, lineHeight: 1.5 },
+};
+
+/**
+ * A determinate progress bar.
+ *
+ * Determinate on purpose: the indexer journals one `concept_id` per embedded
+ * vector, so the count is real rather than a spinner pretending to be progress.
+ */
+function Progress({ label, percent }: { label: string; percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  return (
+    <div style={progressStyles.wrap}>
+      <div style={progressStyles.label}>{label}</div>
+      <div
+        style={progressStyles.track}
+        role="progressbar"
+        aria-valuenow={clamped}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={label}
+      >
+        <div style={{ ...progressStyles.fill, width: `${clamped}%` }} />
+      </div>
+    </div>
+  );
+}
+
+const progressStyles: Record<string, CSSProperties> = {
+  wrap: { display: "flex", flexDirection: "column", gap: 6 },
+  label: { fontSize: 13, lineHeight: 1.4 },
+  track: {
+    height: 6,
+    borderRadius: 999,
+    background: "var(--border, #e4e7ec)",
+    overflow: "hidden",
+  },
+  fill: { height: "100%", background: "var(--primary, #16150f)", transition: "width 400ms ease" },
+};
 
 /**
  * The switch, matching the host's `ToggleSwitch`.
@@ -301,12 +536,14 @@ function Configuration({
   onMessage,
   availableBundles,
   embeddings,
+  build,
 }: {
   companyId: string;
   onSaved: () => void;
   onMessage: Notify;
   availableBundles: Array<{ name: string; conceptCount: number }>;
   embeddings: CorpusStatus["embeddings"];
+  build: CorpusStatus["build"];
 }) {
   const path = `/api/plugins/${PLUGIN_ID}/config?companyId=${encodeURIComponent(companyId)}`;
   const [stored, setStored] = useState<Record<string, unknown> | null>(null);
@@ -374,6 +611,76 @@ function Configuration({
     }
   }, [runRequestRefresh, companyId, onMessage]);
 
+  /**
+   * Prove the embedding endpoint before semantic retrieval is switched on.
+   *
+   * The probe runs in the worker, through the same egress client the query path
+   * uses, so a pass means "a search will be able to embed its query" — which a
+   * request from this page could not establish. It is required before the switch
+   * can be turned on, because the alternative is what happened here: RAG on, a
+   * query that quietly stayed keyword-only, and no way to tell.
+   */
+  const runValidateRag = usePluginAction(ACTION_KEYS.validateRag);
+  const [probe, setProbe] = useState<{ state: "idle" | "busy" | "ok" | "error"; message: string }>({
+    state: "idle",
+    message: "",
+  });
+  const [validatedFor, setValidatedFor] = useState<string | null>(null);
+  const ragKey = draft
+    ? `${draft.rag.endpoint.trim()}|${draft.rag.model.trim()}|${draft.rag.secretRef.trim()}`
+    : "";
+  const validated = validatedFor !== null && validatedFor === ragKey;
+
+  const probeEndpoint = useCallback(async () => {
+    if (!draft) return;
+    setProbe({ state: "busy", message: "Asking the endpoint to embed one string…" });
+    try {
+      const outcome = (await runValidateRag({
+        companyId,
+        endpoint: draft.rag.endpoint.trim(),
+        model: draft.rag.model.trim(),
+        secretRef: draft.rag.secretRef.trim(),
+      })) as
+        | {
+            ok?: boolean;
+            dim?: number;
+            ms?: number;
+            error?: string;
+            matchesIndex?: boolean | null;
+          }
+        | undefined;
+      if (outcome?.ok) {
+        setValidatedFor(ragKey);
+        const mismatch =
+          outcome.matchesIndex === false
+            ? " The index on disk was built with a different model or width, so ranking would be meaningless until it is rebuilt."
+            : "";
+        setProbe({
+          state: "ok",
+          message: `The endpoint answered with ${outcome.dim} dimensions in ${
+            outcome.ms ?? "?"
+          } ms.${mismatch}`,
+        });
+        return;
+      }
+      setValidatedFor(null);
+      setProbe({ state: "error", message: outcome?.error ?? "The endpoint did not answer." });
+    } catch (error) {
+      setValidatedFor(null);
+      setProbe({ state: "error", message: sanitizeErrorMessage(error) });
+    }
+  }, [companyId, draft, ragKey, runValidateRag]);
+
+  // An already-configured organization should not have to press a button to learn
+  // that what it has is working, so one check runs by itself.
+  const autoChecked = useRef(false);
+  useEffect(() => {
+    if (autoChecked.current) return;
+    if (!draft?.rag.enabled || !draft.rag.endpoint || !draft.rag.model) return;
+    autoChecked.current = true;
+    void probeEndpoint();
+  }, [draft, probeEndpoint]);
+
   /** Write one change immediately, the way a General settings switch does. */
   const write = useCallback(
     async (edits: Partial<OperatorConfig>, announce?: string) => {
@@ -433,6 +740,11 @@ function Configuration({
 
   return (
     <>
+      <GroupHeading
+        title="OKF"
+        description="The corpus itself: where it lives, which parts of it this organization may read, and how it is refreshed. Nothing in this section changes how results are ranked."
+      />
+
       <Section
         title="Documentation tools"
         description="While this is off, every Docs tool call is refused, whatever an agent is otherwise allowed. It is off until you turn it on."
@@ -447,6 +759,19 @@ function Configuration({
           />
         }
       />
+
+      <Section
+        title="Corpus directory"
+        description="Where this organization's OKF corpus is. It is read by the Paperclip worker, so it must be a path inside the environment Paperclip runs in — '~' is the worker's home, which in a container is not yours. Empty means no corpus, and every tool refuses."
+      >
+        <Field
+          value={draft.corpusRoot}
+          disabled={busy}
+          placeholder="~/offline-docs/okf-bundles"
+          label="Corpus directory"
+          onCommit={(value) => void write({ corpusRoot: value.trim() }, "Corpus directory updated.")}
+        />
+      </Section>
 
       <Section
         title="Bundles agents may read"
@@ -504,6 +829,40 @@ function Configuration({
         )}
       </Section>
 
+      <Section
+        title="Rebuilding"
+        description="This plugin cannot fetch anything: the runtime gives it no way to run git or pandoc. Collaborating with a runner on the host, it writes a request; the runner performs the build and writes the corpus."
+      >
+        <Field
+          value={String(draft.refresh.maxAgeDays)}
+          disabled={busy}
+          placeholder="30"
+          label="Rebuild when older than (days)"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3_650) {
+              onMessage("The rebuild age must be between 1 and 3650 days.", "error");
+              return;
+            }
+            void write(
+              { refresh: { ...draft.refresh, maxAgeDays: parsed } },
+              "Rebuild age updated.",
+            );
+          }}
+        />
+        <div style={styles.row}>
+          <Button
+            label={refreshBusy ? "Requesting…" : "Request a rebuild now"}
+            disabled={refreshBusy}
+            onClick={() => void requestRefresh()}
+          />
+          <span style={styles.hint}>
+            Writes a request for this organization. Nothing is fetched by the plugin.
+          </span>
+        </div>
+      </Section>
+
       <details style={styles.disclosure}>
         <summary style={styles.disclosureSummary}>Advanced</summary>
         <p style={styles.fieldHint}>
@@ -552,29 +911,104 @@ function Configuration({
           }}
         />
       </Section>
+      </details>
+
+      <GroupHeading
+        title="RAG"
+        description="Ranking by meaning, on top of keyword search rather than instead of it. It needs two things outside this page: an embedding endpoint, and a vector index written by your host's indexer. The plugin only reads the index."
+      />
 
       <Section
         title="Semantic retrieval"
         description={'Ranking by meaning, on top of keyword search rather than instead of it. Keyword search needs none of this and stays the baseline. What it buys: a page that says "single sign-on" is found by the query SSO, which no amount of keyword tuning will do.'}
       >
+        {/* A build in flight comes first: it is the answer to "why is this taking
+            so long?", and this page is the only place it can be seen — the
+            indexer runs on the host and says nothing between start and finish. */}
+        {build?.active ? (
+          <Progress
+            label={`Building the vector index — ${build.done.toLocaleString("en-US")}${
+              build.total > 0 ? ` of ${build.total.toLocaleString("en-US")}` : ""
+            } concepts (${build.percent}%)`}
+            percent={build.percent}
+          />
+        ) : build?.interrupted ? (
+          <div style={styles.bannerWarning}>
+            <strong>An index build stopped before it finished.</strong>
+            <p style={styles.bannerBody}>
+              {build.done.toLocaleString("en-US")}
+              {build.total > 0 ? ` of ${build.total.toLocaleString("en-US")}` : ""} concepts were
+              embedded and no index was written — a killed build leaves its journal behind. Start it
+              again on the host; it resumes from where it stopped.
+            </p>
+          </div>
+        ) : null}
+
         <p style={styles.fieldHint}>
           {embeddings
-            ? `The corpus has an index: ${embeddings.count.toLocaleString()} vectors of ${
-                embeddings.dim
-              } dimensions, from ${embeddings.model}${
-                embeddings.builtAt ? `, built ${embeddings.builtAt}` : ""
-              }${embeddings.complete ? "" : " — covering only some bundles"}.`
-            : "The corpus has no index, so this cannot work yet. The index is not built here: it is written by the builder on your host when it is given an embedding endpoint, and the plugin only reads it."}
+            ? describeIndexLine(embeddings)
+            : "The corpus has no index, so this cannot work yet. The index is not built here: it is written by the indexer on your host when it is given the same endpoint, and the plugin only reads it."}
         </p>
         <p style={styles.fieldHint}>
-          These settings control the *query*: which endpoint embeds the text an agent
-          searches for, and how much the semantic ranking counts against the keyword one.
-          The index itself — which model, which pages — is decided where the corpus is
-          built, so changing the model here does not rebuild anything.
+          These settings control the *query*: which endpoint embeds the text an agent searches
+          for, and how much the semantic ranking counts against the keyword one. The index itself —
+          which model, which pages — is decided where it is built, so changing the model here does
+          not rebuild anything, and a model that disagrees with the index makes ranking meaningless.
         </p>
+
+        <Field
+          value={draft.rag.endpoint}
+          disabled={busy}
+          placeholder="https://api.example.com/v1/embeddings"
+          label="Embeddings endpoint"
+          onCommit={(value) => void write({ rag: { ...draft.rag, endpoint: value } }, "Endpoint updated.")}
+        />
+        <Field
+          value={draft.rag.model}
+          disabled={busy}
+          placeholder="bge-small"
+          label="Embedding model"
+          onCommit={(value) => void write({ rag: { ...draft.rag, model: value } }, "Model updated.")}
+        />
+        <Field
+          value={draft.rag.secretRef}
+          disabled={busy}
+          placeholder="(a stored secret reference)"
+          label="API key reference"
+          onCommit={(value) => void write({ rag: { ...draft.rag, secretRef: value } }, "Key reference updated.")}
+        />
+
+        <div style={styles.row}>
+          <Button
+            label={probe.state === "busy" ? "Checking…" : "Validate endpoint"}
+            disabled={
+              busy ||
+              probe.state === "busy" ||
+              draft.rag.endpoint.trim().length === 0 ||
+              draft.rag.model.trim().length === 0
+            }
+            onClick={() => void probeEndpoint()}
+          />
+          <span style={styles.hint}>
+            Calls the endpoint from the worker with one throwaway string, the same way a search does.
+          </span>
+        </div>
+        {probe.state === "ok" ? (
+          <p style={styles.fieldHint}>✓ {probe.message}</p>
+        ) : probe.state === "error" ? (
+          <div style={styles.errorBanner}>{probe.message}</div>
+        ) : probe.state === "busy" ? (
+          <p style={styles.fieldHint}>{probe.message}</p>
+        ) : (
+          <p style={styles.fieldHint}>
+            Validate before switching this on: an endpoint that is unreachable, a wrong key, or a
+            model that disagrees with the index all leave search working and silently keyword-only.
+          </p>
+        )}
+
         <Switch
           checked={draft.rag.enabled}
-          disabled={busy}
+          disabled={busy || (!draft.rag.enabled && !validated)}
           label="Also rank by meaning"
           onChange={(next) =>
             void write(
@@ -583,27 +1017,7 @@ function Configuration({
             )
           }
         />
-        <Field
-          value={draft.rag.endpoint}
-          disabled={busy || !draft.rag.enabled}
-          placeholder="https://api.example.com/v1/embeddings"
-          label="Embeddings endpoint"
-          onCommit={(value) => void write({ rag: { ...draft.rag, endpoint: value } }, "Endpoint updated.")}
-        />
-        <Field
-          value={draft.rag.model}
-          disabled={busy || !draft.rag.enabled}
-          placeholder="bge-small"
-          label="Embedding model"
-          onCommit={(value) => void write({ rag: { ...draft.rag, model: value } }, "Model updated.")}
-        />
-        <Field
-          value={draft.rag.secretRef}
-          disabled={busy || !draft.rag.enabled}
-          placeholder="(a stored secret reference)"
-          label="API key reference"
-          onCommit={(value) => void write({ rag: { ...draft.rag, secretRef: value } }, "Key reference updated.")}
-        />
+
         <Field
           value={String(draft.rag.weight)}
           disabled={busy || !draft.rag.enabled}
@@ -620,41 +1034,6 @@ function Configuration({
           }}
         />
       </Section>
-
-      <Section
-        title="Rebuilding"
-        description="This plugin cannot fetch anything: the runtime gives it no way to run git or pandoc. Collaborating with a runner on the host, it writes a request; the runner performs the build and writes the corpus."
-      >
-        <Field
-          value={String(draft.refresh.maxAgeDays)}
-          disabled={busy}
-          placeholder="30"
-          label="Rebuild when older than (days)"
-          numeric
-          onCommit={(value) => {
-            const parsed = Number.parseInt(value, 10);
-            if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3_650) {
-              onMessage("The rebuild age must be between 1 and 3650 days.", "error");
-              return;
-            }
-            void write(
-              { refresh: { ...draft.refresh, maxAgeDays: parsed } },
-              "Rebuild age updated.",
-            );
-          }}
-        />
-        <div style={styles.row}>
-          <Button
-            label={refreshBusy ? "Requesting…" : "Request a rebuild now"}
-            disabled={refreshBusy}
-            onClick={() => void requestRefresh()}
-          />
-          <span style={styles.hint}>
-            Writes a request for this organization. Nothing is fetched by the plugin.
-          </span>
-        </div>
-      </Section>
-      </details>
     </>
   );
 }

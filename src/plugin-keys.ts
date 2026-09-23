@@ -42,6 +42,19 @@ export const ACTION_KEYS = {
    * different states an operator chasing a missing rebuild needs to tell apart.
    */
   requestRefresh: "request-refresh",
+
+  /**
+   * Call the embedding endpoint with a throwaway string, before an operator turns
+   * semantic retrieval on.
+   *
+   * Without this the only way to find out that an endpoint is unreachable, that
+   * the key is wrong, or that the model name does not match the index was to
+   * switch RAG on and read a search result that had quietly stayed keyword-only.
+   * The endpoint is called *through the worker* rather than from the browser,
+   * because the host's egress client is what the query path uses — a check from
+   * the page would prove a different thing.
+   */
+  validateRag: "validate-rag",
 } as const;
 
 /**
