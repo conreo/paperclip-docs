@@ -24,7 +24,10 @@
  *     keys and performs no fetch.
  */
 
-import { MAX_ARG_STRING_CHARS, REQUEST_FILENAME, REQUESTS_FOLDER_KEY } from "./constants.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { MAX_ARG_STRING_CHARS, REQUEST_FILENAME, RESPONSE_FILENAME } from "./constants.js";
 import type { RuntimeSourceDeclaration } from "./runtime-config.js";
 
 /** The on-disk request the host runner reads. */
@@ -110,54 +113,75 @@ export function buildRefreshRequest(
   };
 }
 
-/**
- * The narrow slice of the host client this module needs.
- *
- * Structural rather than imported, so a test can pass a fake and so a host that
- * does not provide local folders produces a clear log line instead of a crash.
- */
-export interface RequestWriter {
-  /** The host's signature, which is positional. */
-  writeTextAtomic(
-    companyId: string,
-    folderKey: string,
-    relativePath: string,
-    contents: string,
-  ): Promise<unknown>;
-}
-
 export type RequestOutcome =
   | { written: true; path: string }
   | { written: false; skipped: string };
 
 /**
+ * Where a request goes: a sibling of the corpus, derived from it.
+ *
+ * ## Why nothing is configured for this
+ *
+ * The first version declared a `local.folders` folder for requests, which made
+ * Paperclip ask the operator to choose a directory and show the plugin as "needs
+ * attention" until they did. That was the wrong shape: an operator configuring a
+ * filesystem path is a deployment detail leaking into a settings page, and the path
+ * is already implied by where the corpus lives.
+ *
+ * A *sibling* of the corpus rather than a directory inside it, because the corpus is
+ * replaced by a rename on every rebuild — anything written inside it would be
+ * discarded, and this plugin does not write into the corpus at all.
+ *
+ * The runner derives the same path, so the two halves agree without either being
+ * told what it is.
+ */
+export function requestsDirFor(corpusRoot: string): string {
+  const trimmed = corpusRoot.replace(/[\\/]+$/, "");
+  return `${trimmed}${REQUEST_SUFFIX}`;
+}
+
+/** `okf-bundles` → `okf-bundles.requests`. */
+const REQUEST_SUFFIX = ".requests";
+
+/**
  * Write the request, or explain why it could not be written.
  *
  * Never throws. A refresh request is an optimisation: failing to write one must not
- * fail the job, and must not be silent either — the operator is told, because a
- * refresh that never happens looks exactly like a refresh that is not needed.
+ * fail the operator's action, and must not be silent either — a refresh that never
+ * happens looks exactly like a refresh that is not needed. Written to a temporary
+ * file and renamed, so a runner polling the directory never reads half a document.
  */
 export async function writeRefreshRequest(
-  writer: RequestWriter | undefined,
-  companyId: string,
+  corpusRoot: string,
   request: RefreshRequest,
 ): Promise<RequestOutcome> {
   const contents = `${JSON.stringify(request, null, 2)}\n`;
   if (contents.length > MAX_ARG_STRING_CHARS * 64) {
     return { written: false, skipped: "the request is implausibly large; refusing to write it" };
   }
-  if (!writer || typeof writer.writeTextAtomic !== "function") {
+  const dir = requestsDirFor(corpusRoot);
+  const target = path.join(dir, REQUEST_FILENAME);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const temporary = `${target}.tmp`;
+    await fs.writeFile(temporary, contents, "utf8");
+    await fs.rename(temporary, target);
+    return { written: true, path: target };
+  } catch (error) {
     return {
       written: false,
-      skipped:
-        `the host did not provide local folders, so a request cannot be written. ` +
-        `Declare "${REQUESTS_FOLDER_KEY}" and point it at a directory the runner watches.`,
+      skipped: `the request could not be written to ${target}: ${String(error)}`,
     };
   }
+}
+
+/** The runner's reply, when it has written one. Reported rather than guessed at. */
+export async function readRefreshResponse(corpusRoot: string): Promise<Record<string, unknown> | null> {
   try {
-    await writer.writeTextAtomic(companyId, REQUESTS_FOLDER_KEY, REQUEST_FILENAME, contents);
-    return { written: true, path: `${REQUESTS_FOLDER_KEY}/${REQUEST_FILENAME}` };
-  } catch (error) {
-    return { written: false, skipped: `the request could not be written: ${String(error)}` };
+    const raw = await fs.readFile(path.join(requestsDirFor(corpusRoot), RESPONSE_FILENAME), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
   }
 }

@@ -251,6 +251,16 @@ export const styles: Record<string, CSSProperties> = {
     resize: "vertical",
   },
   fieldHint: { fontSize: 12.5, color: ui.mutedForeground, lineHeight: 1.4, margin: 0 },
+  // Tuning lives behind one disclosure so the page opens on the two things an
+  // operator comes for: is it working, and who may read it.
+  disclosure: { marginTop: 4 },
+  disclosureSummary: {
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
+    color: ui.mutedForeground,
+    padding: "6px 0",
+  },
 
   // -- Callouts -----------------------------------------------------------
   /** One banner for a failure, rather than a message beside each control. */

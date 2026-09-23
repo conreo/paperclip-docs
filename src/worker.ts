@@ -53,9 +53,9 @@ import {
 import {
   buildRefreshRequest,
   corpusAgeDays,
+  readRefreshResponse,
   shouldRequestRefresh,
   writeRefreshRequest,
-  type RequestWriter,
 } from "./refresh.js";
 import { CorpusStore } from "./corpus/store.js";
 import { DOC_TOOL_SPECS, toJsonSchema, type DocToolSpec } from "./tools/catalog.js";
@@ -88,17 +88,6 @@ const registeredTools = new Set<string>();
  *
  * Keyed weakly so a context that goes away is not kept alive by this map.
  */
-/**
- * The declared-folder client, if this host provides one.
- *
- * Returned structurally rather than asserted: a host without local folders must
- * produce a clear "cannot write a request" outcome, not a crash in a settings page.
- */
-function localWriter(ctx: PluginContext): RequestWriter | undefined {
-  const folders = ctx.localFolders as RequestWriter | undefined;
-  return folders && typeof folders.writeTextAtomic === "function" ? folders : undefined;
-}
-
 const registeredByContext = new WeakMap<object, Set<string>>();
 const registeredActions = new WeakMap<object, Set<string>>();
 
@@ -337,8 +326,7 @@ const plugin = definePlugin({
           manifestError: status.error,
         });
         const outcome = await writeRefreshRequest(
-          localWriter(ctx),
-          companyId,
+          scoped.corpusRoot,
           buildRefreshRequest(
             scoped.corpusRoot,
             scoped.sources,
@@ -346,7 +334,10 @@ const plugin = definePlugin({
           ),
         );
         ctx.logger.info("paperclip-docs refresh request", { companyId, ...outcome });
-        return { ...outcome, ageDays, policy: decision.reason };
+        // The runner's reply, when there is one, so pressing the button reports what
+        // the last build actually did rather than only that a file was written.
+        const response = await readRefreshResponse(scoped.corpusRoot);
+        return { ...outcome, ageDays, policy: decision.reason, lastBuild: response };
       });
       actionsFor(ctx).add(ACTION_KEYS.requestRefresh);
     }

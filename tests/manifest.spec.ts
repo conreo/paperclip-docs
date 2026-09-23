@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import manifest from "../src/manifest.js";
 import { readFileSync } from "node:fs";
 
-import { DOC_TOOLS, PLUGIN_ID, PLUGIN_VERSION, REQUESTS_FOLDER_KEY } from "../src/constants.js";
+import { DOC_TOOLS, PLUGIN_ID, PLUGIN_VERSION } from "../src/constants.js";
 
 describe("manifest", () => {
   it("identifies the plugin and its API version", () => {
@@ -27,7 +27,13 @@ describe("manifest", () => {
     expect(manifest.id).toBe("paperclip-docs");
     expect(manifest.apiVersion).toBe(1);
     expect(manifest.version).toBe(PLUGIN_VERSION);
-    expect(manifest.version).toBe("0.2.0");
+    // Kept as a literal on purpose: it forces a version bump to be a deliberate edit
+    // here as well as in package.json, and the two drifting apart is exactly what
+    // this catches.
+    expect(manifest.version).toBe("0.2.1");
+    expect(manifest.version).toBe(
+      JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version,
+    );
   });
 
   it("points the host at the built worker and UI bundles", () => {
@@ -40,29 +46,31 @@ describe("manifest", () => {
       "agent.tools.register",
       "http.outbound",
       "instance.settings.register",
-      // Writes one request file into a folder the operator declares. The corpus
-      // itself is still only read, with `node:fs`.
-      "local.folders",
       // Resolves the embedding key by reference, so the value stays in the host.
       "secrets.read-ref",
     ]);
   });
 
-  it("declares a local-folder capability only because it writes one", () => {
-    // This replaces a test that asserted `local.folders` was absent. Absence was
-    // the right claim until refresh requests existed; now the claim that matters is
-    // that the capability is *used*, so it is checked against the source rather
-    // than against a wish.
+  it("asks the operator to configure no filesystem path at all", () => {
+    // This test has now been through all three positions, and the history is the
+    // point. It began by asserting `local.folders` was absent. When refresh
+    // requests arrived it asserted the capability was *used*, with a declared folder
+    // — which made Paperclip ask the operator to choose a directory, and showed the
+    // plugin as "needs attention" until they did. A filesystem path is a deployment
+    // detail, so the folder declaration is gone and the request location is derived
+    // from the corpus root instead. What is asserted now is that nothing is left to
+    // configure.
+    expect(manifest.capabilities).not.toContain("local.folders");
+    expect(manifest.localFolders ?? []).toHaveLength(0);
+  });
+
+  it("declares a capability only where the source uses it", () => {
+    // An egress capability granted for a feature that never calls out is a
+    // permission an operator gave for nothing, so each is checked against the code.
     const worker = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
-    expect(worker).toContain("ctx.localFolders");
-    // The other two are used too, and this is the assertion that keeps that true:
-    // an egress capability granted for a feature that never calls out is a
-    // permission an operator gave for nothing.
     expect(worker).toContain("ctx.http.fetch");
     expect(worker).toContain("ctx.secrets.resolve");
-    // And that the write goes to a declared folder, not to an arbitrary path.
-    expect(manifest.localFolders?.map((folder) => folder.folderKey)).toEqual([REQUESTS_FOLDER_KEY]);
-    expect(manifest.localFolders?.[0]?.access).toBe("readWrite");
+    expect(worker).not.toContain("ctx.localFolders");
   });
 
   it("does not claim a capability it has no use for", () => {
@@ -74,6 +82,9 @@ describe("manifest", () => {
       "plugin.state.write",
       "companies.read",
       "jobs.schedule",
+      // Not needed since the request location became derived: declaring it made the
+      // host ask the operator to choose a directory.
+      "local.folders",
     ]) {
       expect(manifest.capabilities).not.toContain(unwanted);
     }

@@ -15,7 +15,7 @@
 
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
-import { PLUGIN_ID, PLUGIN_VERSION, REQUESTS_FOLDER_KEY } from "./constants.js";
+import { PLUGIN_ID, PLUGIN_VERSION } from "./constants.js";
 import { INSTANCE_CONFIG_SCHEMA } from "./config.js";
 import { DOC_TOOL_SPECS, toJsonSchema } from "./tools/catalog.js";
 
@@ -34,11 +34,12 @@ const manifest: PaperclipPluginManifestV1 = {
     // Required by the settingsPage slot below. The host validates this pairing
     // and rejects the manifest without it, naming the capability in the error.
     "instance.settings.register",
-    // The corpus is *read* with `node:fs` (no declaration needed), but a refresh
-    // request is *written* — and the moment this plugin writes, the write is
-    // declared and contained to a folder the operator chose, rather than being a
-    // quiet `node:fs` call. `local.folders` covers exactly that one folder.
-    "local.folders",
+    // No `local.folders`. It was declared so the refresh request could be written
+    // into a folder the operator picked — which made Paperclip ask them to choose a
+    // directory and mark the plugin "needs attention" until they did. A filesystem
+    // path is a deployment detail, not a setting: the request goes to a location
+    // derived from the corpus root, which the deployment already decided, and the
+    // runner derives the same path.
     // The optional semantic path calls an embedding endpoint — through the host's
     // own client, which is the audited route. Node's `fetch` would work without
     // declaring anything, and that is exactly why it is not used: an undeclared
@@ -53,15 +54,6 @@ const manifest: PaperclipPluginManifestV1 = {
     // list and depending on each one having configured its request folder. The
     // schedule belongs to the runner instead, which is the process that is actually
     // running continuously, and the plugin writes requests on demand.
-  ],
-  localFolders: [
-    {
-      folderKey: REQUESTS_FOLDER_KEY,
-      displayName: "Build requests",
-      description:
-        "Where this plugin writes a refresh request for a host-side runner to pick up. Nothing else is written here, and the corpus itself is never modified.",
-      access: "readWrite",
-    },
   ],
 
   entrypoints: {

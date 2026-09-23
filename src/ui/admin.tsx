@@ -412,19 +412,6 @@ function Configuration({
       />
 
       <Section
-        title="Corpus directory"
-        description="The OKF bundle directory to serve. `~` expands to the worker user's home. The plugin reads this directory; it never writes to it."
-      >
-        <Field
-          value={draft.corpusRoot}
-          disabled={busy}
-          placeholder="~/offline-docs/okf-bundles"
-          label="Corpus directory"
-          onCommit={(value) => void write({ corpusRoot: value }, "Corpus directory updated.")}
-        />
-      </Section>
-
-      <Section
         title="Bundles agents may read"
         description="An allowlist, one bundle name per line. Leave it empty to serve every bundle in the corpus."
       >
@@ -447,6 +434,13 @@ function Configuration({
           }
         />
       </Section>
+
+      <details style={styles.disclosure}>
+        <summary style={styles.disclosureSummary}>Advanced</summary>
+        <p style={styles.fieldHint}>
+          These save as you edit them — on blur or Enter. There is no Save button, so a field cannot
+          be left half-changed.
+        </p>
 
       <Section
         title="Maximum search results"
@@ -576,6 +570,7 @@ function Configuration({
           </span>
         </div>
       </Section>
+      </details>
     </>
   );
 }
@@ -686,10 +681,6 @@ function Field({
           style={shared}
         />
       )}
-      <p style={styles.fieldHint}>
-        {multiline ? "Saves when you click away. " : "Saves when you click away or press Enter. "}
-        This page has no Save button.
-      </p>
     </div>
   );
 }

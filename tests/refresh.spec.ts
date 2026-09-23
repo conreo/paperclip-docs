@@ -10,14 +10,19 @@
 
 import { describe, expect, it } from "vitest";
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import {
   buildRefreshRequest,
   corpusAgeDays,
+  readRefreshResponse,
+  requestsDirFor,
   shouldRequestRefresh,
   writeRefreshRequest,
-  type RequestWriter,
 } from "../src/refresh.js";
-import { REFRESH_REQUEST_SCHEMA, REQUEST_FILENAME, REQUESTS_FOLDER_KEY } from "../src/constants.js";
+import { REFRESH_REQUEST_SCHEMA, REQUEST_FILENAME, RESPONSE_FILENAME } from "../src/constants.js";
 import type { RuntimeSourceDeclaration } from "../src/runtime-config.js";
 
 const SOURCE: RuntimeSourceDeclaration = {
@@ -36,13 +41,9 @@ const SOURCE: RuntimeSourceDeclaration = {
 
 const NOW = new Date("2026-09-23T12:00:00Z");
 
-function writer(record: unknown[]): RequestWriter {
-  return {
-    async writeTextAtomic(companyId, folderKey, relativePath, contents) {
-      record.push({ companyId, folderKey, relativePath, contents });
-      return { ready: true };
-    },
-  };
+function tempCorpus(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "docs-refresh-"));
+  return path.join(root, "okf-bundles");
 }
 
 describe("corpus age", () => {
@@ -121,41 +122,61 @@ describe("the request payload", () => {
 });
 
 describe("writing the request", () => {
-  it("writes into the declared folder, one file, atomically", async () => {
-    const calls: unknown[] = [];
-    const outcome = await writeRefreshRequest(
-      writer(calls),
-      "company-1",
-      buildRefreshRequest("/corpus", [SOURCE], "because", NOW),
-    );
-    expect(outcome).toEqual({ written: true, path: `${REQUESTS_FOLDER_KEY}/${REQUEST_FILENAME}` });
-    const call = calls[0] as { companyId: string; folderKey: string; relativePath: string; contents: string };
-    expect(call.companyId).toBe("company-1");
-    expect(call.folderKey).toBe(REQUESTS_FOLDER_KEY);
-    expect(call.relativePath).toBe(REQUEST_FILENAME);
-    expect(JSON.parse(call.contents).sources).toHaveLength(1);
+  it("goes to a sibling of the corpus, derived from it, with nothing configured", async () => {
+    // The first version made the operator choose a folder for this, which is a
+    // deployment detail leaking into a settings page — and it showed the plugin as
+    // "needs attention" until they picked one.
+    const corpus = tempCorpus();
+    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", NOW));
+    expect(outcome).toEqual({ written: true, path: path.join(`${corpus}.requests`, REQUEST_FILENAME) });
+    expect(requestsDirFor(corpus)).toBe(`${corpus}.requests`);
+    // A sibling, never inside: the corpus is replaced by a rename on every rebuild,
+    // so anything written inside it would be discarded. Note the separator — a
+    // string-prefix test would pass on `okf-bundles.requests` while telling us
+    // nothing about containment.
+    expect(path.dirname(requestsDirFor(corpus))).toBe(path.dirname(corpus));
+    expect(requestsDirFor(corpus).startsWith(corpus + path.sep)).toBe(false);
+    fs.rmSync(path.dirname(corpus), { recursive: true, force: true });
   });
 
-  it("explains itself when the host offers no local folders", async () => {
-    // Not a crash: the settings page must be able to say why pressing the button
-    // did nothing, and name the folder that has to be declared.
-    const outcome = await writeRefreshRequest(undefined, "company-1", buildRefreshRequest("/c", [], "r", NOW));
-    expect(outcome.written).toBe(false);
-    expect(outcome.written === false && outcome.skipped).toContain(REQUESTS_FOLDER_KEY);
+  it("creates the directory and leaves no temporary file behind", async () => {
+    const corpus = tempCorpus();
+    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [SOURCE], "why", NOW));
+    const dir = requestsDirFor(corpus);
+    expect(fs.readdirSync(dir)).toEqual([REQUEST_FILENAME]);
+    // Written to a temp name and renamed, so a runner polling the directory cannot
+    // read half a document.
+    const written = JSON.parse(fs.readFileSync(path.join(dir, REQUEST_FILENAME), "utf8"));
+    expect(written.schema).toBe(REFRESH_REQUEST_SCHEMA);
+    expect(written.sources).toHaveLength(1);
+    fs.rmSync(path.dirname(corpus), { recursive: true, force: true });
   });
 
   it("reports a failed write rather than throwing", async () => {
-    const failing: RequestWriter = {
-      async writeTextAtomic() {
-        throw new Error("folder is not configured for this company");
-      },
-    };
-    const outcome = await writeRefreshRequest(
-      failing,
-      "company-1",
-      buildRefreshRequest("/c", [], "r", NOW),
-    );
+    // A file where the parent directory should be: deterministic on any platform.
+    const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "docs-blocked-")), "file");
+    fs.writeFileSync(blocker, "not a directory");
+    const corpus = path.join(blocker, "okf-bundles");
+    const outcome = await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "r", NOW));
     expect(outcome.written).toBe(false);
-    expect(outcome.written === false && outcome.skipped).toContain("not configured");
+    expect(outcome.written === false && outcome.skipped).toContain("could not be written");
+    fs.rmSync(path.dirname(blocker), { recursive: true, force: true });
+  });
+
+  it("reads the runner's reply, and copes with there not being one", async () => {
+    const corpus = tempCorpus();
+    expect(await readRefreshResponse(corpus)).toBeNull();
+
+    await writeRefreshRequest(corpus, buildRefreshRequest(corpus, [], "why", NOW));
+    fs.writeFileSync(
+      path.join(requestsDirFor(corpus), RESPONSE_FILENAME),
+      JSON.stringify({ status: "built", pages: 4320 }),
+    );
+    expect((await readRefreshResponse(corpus))?.status).toBe("built");
+
+    // Corrupt or half-written: reported as absent, never as a crash in a page.
+    fs.writeFileSync(path.join(requestsDirFor(corpus), RESPONSE_FILENAME), "{not json");
+    expect(await readRefreshResponse(corpus)).toBeNull();
+    fs.rmSync(path.dirname(corpus), { recursive: true, force: true });
   });
 });

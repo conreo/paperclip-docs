@@ -12,7 +12,7 @@
 export const PLUGIN_ID = "paperclip-docs";
 
 /** Manifest version; keep in sync with package.json. */
-export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_VERSION = "0.2.1";
 
 /**
  * Where the corpus lives when the operator has not said otherwise.
@@ -137,18 +137,10 @@ export type PathRefusalCode =
   | "symlink_escape"
   | "invalid_path";
 
-/**
- * The declared local folder build requests are written into.
- *
- * Declared through `local.folders` rather than written with `node:fs` like the
- * corpus read is: this plugin's whole trust story is that it reads an artifact and
- * owns nothing, so the moment it writes, the write is declared, contained to a
- * folder the operator chose, and visible in the capability list.
- */
-export const REQUESTS_FOLDER_KEY = "docs-requests";
-
 /** One file, replaced atomically: a runner takes the newest and needs no queue. */
 export const REQUEST_FILENAME = "request.json";
+/** What the runner writes back, which the settings page reports. */
+export const RESPONSE_FILENAME = "response.json";
 
 /** The request shape the runner understands; it refuses one it does not know. */
 export const REFRESH_REQUEST_SCHEMA = 1;

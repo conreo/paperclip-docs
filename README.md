@@ -200,19 +200,18 @@ Other bounds:
 - **Lazy, mtime-invalidated index.** The corpus is walked once and cached against a cheap mtime
   signature. A search does not re-read the corpus from disk per request.
 - **No writes to the corpus, no state, and no egress unless you ask for it.** The plugin persists
-  nothing of its own, and it never modifies the corpus. Its capabilities are exactly five, and each
-  one is used:
+  nothing of its own, and it never modifies the corpus. Its capabilities are exactly four, and each
+  is used:
 
   | Capability | Why |
   |---|---|
   | `agent.tools.register` | the four tools |
   | `instance.settings.register` | the settings page |
-  | `local.folders` | writing a *refresh request* into one folder you declare; the corpus itself is read with `node:fs` |
   | `http.outbound` | only the optional semantic path, and only when it is switched on |
   | `secrets.read-ref` | resolving an embedding key by reference, so the value stays in the host |
 
   Inspect that list before trusting the plugin — it is short on purpose, and a test asserts each one
-  is actually used rather than declared and forgotten.
+  is used rather than declared and forgotten.
 
 ### A note on the documentation itself
 
@@ -261,9 +260,16 @@ two things about it: a registry of what you want, and the request that asks for 
 "refresh": { "enabled": true, "maxAgeDays": 30 }
 ```
 
-With `refresh.enabled`, the settings page offers **Request a rebuild now**. It writes
-`request.json` into the folder you declared, and the runner writes `response.json` beside it — which
-this page reads back, so you see the outcome without opening a container log. Staleness is measured
+With `refresh.enabled`, the settings page offers **Request a rebuild now**. It writes `request.json`
+into `<corpusRoot>.requests` — a sibling of the corpus, derived from it, so **there is no path to
+configure anywhere**. The runner derives the same directory, and writes `response.json` beside the
+request, which this page reads back: you see what the last build actually did without opening a
+container log.
+
+Nothing about the deployment appears in this plugin's settings. The corpus root, the source registry
+and the request location are set by whoever deploys it — you, or an agent working through Paperclip's
+config API. The page opens on the two things an operator comes for: is it working, and who may read
+it. Staleness is measured
 from the build manifest's date, never from file mtimes: a restore from backup makes every file look
 new, and the corpus would then never be rebuilt.
 
