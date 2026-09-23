@@ -42,7 +42,14 @@ import type { PluginContext, ToolResult, ToolRunContext } from "@paperclipai/plu
 
 import { PLUGIN_ID } from "./constants.js";
 import { normalizeConfig, type RuntimeConfig } from "./runtime-config.js";
-import { DATA_KEYS } from "./plugin-keys.js";
+import { ACTION_KEYS, DATA_KEYS } from "./plugin-keys.js";
+import {
+  buildRefreshRequest,
+  corpusAgeDays,
+  shouldRequestRefresh,
+  writeRefreshRequest,
+  type RequestWriter,
+} from "./refresh.js";
 import { CorpusStore } from "./corpus/store.js";
 import { DOC_TOOL_SPECS, toJsonSchema, type DocToolSpec } from "./tools/catalog.js";
 import { listDocs, readDoc, searchDocs, sources, statusPayload } from "./tools/handlers.js";
@@ -74,7 +81,28 @@ const registeredTools = new Set<string>();
  *
  * Keyed weakly so a context that goes away is not kept alive by this map.
  */
+/**
+ * The declared-folder client, if this host provides one.
+ *
+ * Returned structurally rather than asserted: a host without local folders must
+ * produce a clear "cannot write a request" outcome, not a crash in a settings page.
+ */
+function localWriter(ctx: PluginContext): RequestWriter | undefined {
+  const folders = ctx.localFolders as RequestWriter | undefined;
+  return folders && typeof folders.writeTextAtomic === "function" ? folders : undefined;
+}
+
 const registeredByContext = new WeakMap<object, Set<string>>();
+const registeredActions = new WeakMap<object, Set<string>>();
+
+function actionsFor(ctx: object): Set<string> {
+  let registered = registeredActions.get(ctx);
+  if (!registered) {
+    registered = new Set<string>();
+    registeredActions.set(ctx, registered);
+  }
+  return registered;
+}
 
 function toolsFor(ctx: object): Set<string> {
   const existing = registeredByContext.get(ctx);
@@ -220,6 +248,46 @@ const plugin = definePlugin({
       // Not a gate — each company's own config decides whether calls succeed.
       instanceDefaultEnabled: config.enabled,
     });
+
+    if (!actionsFor(ctx).has(ACTION_KEYS.requestRefresh)) {
+      ctx.actions.register(ACTION_KEYS.requestRefresh, async (params) => {
+        const companyId =
+          typeof params?.["companyId"] === "string" && params["companyId"].trim().length > 0
+            ? params["companyId"].trim()
+            : "";
+        if (!companyId) {
+          return { written: false, skipped: "no company scope on this action" };
+        }
+        const { config: scoped, error: scopedError } = await loadConfig(ctx, companyId);
+        if (scopedError) {
+          return { written: false, skipped: `the configuration could not be read: ${scopedError}` };
+        }
+        const status = await store.describe(scoped.corpusRoot);
+        const ageDays = corpusAgeDays(status.manifest, new Date());
+        // An operator pressing the button is not subject to the age limit: they
+        // asked. The limit exists so the *schedule* does not ask too often, and it
+        // is carried in the request so the runner can apply it between runs.
+        const decision = shouldRequestRefresh({
+          refreshEnabled: scoped.refresh.enabled,
+          maxAgeDays: scoped.refresh.maxAgeDays,
+          ageDays,
+          sources: scoped.sources,
+          manifestError: status.error,
+        });
+        const outcome = await writeRefreshRequest(
+          localWriter(ctx),
+          companyId,
+          buildRefreshRequest(
+            scoped.corpusRoot,
+            scoped.sources,
+            `requested from the settings page; ${decision.reason}`,
+          ),
+        );
+        ctx.logger.info("paperclip-docs refresh request", { companyId, ...outcome });
+        return { ...outcome, ageDays, policy: decision.reason };
+      });
+      actionsFor(ctx).add(ACTION_KEYS.requestRefresh);
+    }
 
     // -----------------------------------------------------------------
     // Data handlers — the settings page's read-only view of the corpus.

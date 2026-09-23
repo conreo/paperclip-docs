@@ -26,10 +26,15 @@ import {
   DEFAULT_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
+  DEFAULT_REFRESH_MAX_AGE_DAYS,
   MAX_MAX_DOC_CHARS,
   MAX_MAX_RESULTS,
+  MAX_REFRESH_MAX_AGE_DAYS,
   MIN_MAX_DOC_CHARS,
   MIN_MAX_RESULTS,
+  MIN_REFRESH_MAX_AGE_DAYS,
+  SOURCE_CONVERSIONS,
+  SOURCE_KINDS,
 } from "./constants.js";
 
 /**
@@ -77,6 +82,54 @@ export const INSTANCE_CONFIG_SCHEMA: Record<string, unknown> = {
         "How much of a document read_doc may return before truncating. An unbounded result can evict a conversation.",
       default: DEFAULT_MAX_DOC_CHARS,
     },
+    refresh: {
+      type: "object",
+      additionalProperties: false,
+      title: "Refresh",
+      description:
+        "Ask a host-side runner to rebuild this corpus when it gets old. The plugin cannot fetch anything itself — the runtime gives it no way to run git or pandoc — so this writes a request into a declared folder and a runner on the host honours it.",
+      default: { enabled: false, maxAgeDays: DEFAULT_REFRESH_MAX_AGE_DAYS },
+      properties: {
+        enabled: {
+          type: "boolean",
+          title: "Ask for rebuilds",
+          description:
+            "Write a refresh request when the corpus is older than the limit below. Off means the corpus is only ever updated by hand.",
+          default: false,
+        },
+        maxAgeDays: {
+          type: "number",
+          title: "Rebuild when older than (days)",
+          description: "How old the corpus may get before a rebuild is requested.",
+          default: DEFAULT_REFRESH_MAX_AGE_DAYS,
+        },
+      },
+    },
+    sources: {
+      type: "array",
+      title: "Documentation sources",
+      description:
+        "This organization's registry: what to build, and which version of it. Adding a source is data, not code, so this is the whole of the per-organization work.",
+      default: [],
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "kind"],
+        properties: {
+          id: { type: "string", title: "Bundle name" },
+          title: { type: "string", title: "Display name" },
+          kind: { type: "string", enum: [...SOURCE_KINDS], title: "Kind" },
+          repo: { type: "string", title: "Repository" },
+          url: { type: "string", title: "URL (llms.txt)" },
+          ref: { type: "string", title: "Version to pin" },
+          path: { type: "string", title: "Subdirectory" },
+          convert: { type: "string", enum: [...SOURCE_CONVERSIONS], title: "Conversion" },
+          include: { type: "array", items: { type: "string" }, title: "Include globs" },
+          exclude: { type: "array", items: { type: "string" }, title: "Exclude globs" },
+          tags: { type: "array", items: { type: "string" }, title: "Tags" },
+        },
+      },
+    },
   },
 };
 
@@ -104,12 +157,34 @@ export function settableConfigKeys(): string[] {
  * `~` — because this feeds a form, and the operator should see the value they
  * typed. The runtime expands it.
  */
+/** One entry of the per-organization source registry, as the form holds it. */
+export interface OperatorSource {
+  id: string;
+  title?: string;
+  kind: string;
+  repo?: string;
+  url?: string;
+  ref?: string;
+  path?: string;
+  convert?: string;
+  include?: string[];
+  exclude?: string[];
+  tags?: string[];
+}
+
+export interface OperatorRefresh {
+  enabled: boolean;
+  maxAgeDays: number;
+}
+
 export interface OperatorConfig {
   enabled: boolean;
   corpusRoot: string;
   allowedBundles: string[];
   maxResults: number;
   maxDocChars: number;
+  refresh: OperatorRefresh;
+  sources: OperatorSource[];
 }
 
 /** The schema defaults, which is what an unconfigured plugin behaves as. */
@@ -119,6 +194,8 @@ export const OPERATOR_CONFIG_DEFAULTS: OperatorConfig = {
   allowedBundles: [],
   maxResults: DEFAULT_MAX_RESULTS,
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
+  refresh: { enabled: false, maxAgeDays: DEFAULT_REFRESH_MAX_AGE_DAYS },
+  sources: [],
 };
 
 function operatorBool(raw: Record<string, unknown>, key: string, fallback: boolean): boolean {
@@ -178,7 +255,63 @@ export function readOperatorConfig(raw: unknown): OperatorConfig {
       MIN_MAX_DOC_CHARS,
       MAX_MAX_DOC_CHARS,
     ),
+    refresh: readOperatorRefresh(record["refresh"]),
+    sources: readOperatorSources(record["sources"]),
   };
+}
+
+/**
+ * The refresh block, read leniently.
+ *
+ * Feeds a form: a key that drifted shows its default rather than preventing the
+ * page from opening. The worker's normaliser is the strict one.
+ */
+function readOperatorRefresh(raw: unknown): OperatorRefresh {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...OPERATOR_CONFIG_DEFAULTS.refresh };
+  }
+  const record = raw as Record<string, unknown>;
+  return {
+    enabled: operatorBool(record, "enabled", OPERATOR_CONFIG_DEFAULTS.refresh.enabled),
+    maxAgeDays: operatorNumber(
+      record,
+      "maxAgeDays",
+      OPERATOR_CONFIG_DEFAULTS.refresh.maxAgeDays,
+      MIN_REFRESH_MAX_AGE_DAYS,
+      MAX_REFRESH_MAX_AGE_DAYS,
+    ),
+  };
+}
+
+/** The registry, read leniently: an entry without an id or kind is dropped. */
+function readOperatorSources(raw: unknown): OperatorSource[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OperatorSource[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record["id"] === "string" ? record["id"].trim() : "";
+    const kind = typeof record["kind"] === "string" ? record["kind"].trim() : "";
+    if (!id || !kind) continue;
+    const strings = (key: string): string[] | undefined =>
+      Array.isArray(record[key])
+        ? (record[key] as unknown[]).filter((v): v is string => typeof v === "string")
+        : undefined;
+    out.push({
+      id,
+      kind,
+      title: typeof record["title"] === "string" ? record["title"] : undefined,
+      repo: typeof record["repo"] === "string" ? record["repo"] : undefined,
+      url: typeof record["url"] === "string" ? record["url"] : undefined,
+      ref: typeof record["ref"] === "string" ? record["ref"] : undefined,
+      path: typeof record["path"] === "string" ? record["path"] : undefined,
+      convert: typeof record["convert"] === "string" ? record["convert"] : undefined,
+      include: strings("include"),
+      exclude: strings("exclude"),
+      tags: strings("tags"),
+    });
+  }
+  return out;
 }
 
 export interface SavePayload {

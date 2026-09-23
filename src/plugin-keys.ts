@@ -28,14 +28,21 @@ export const DATA_KEYS = {
 /**
  * Actions (`ctx.actions.register` / `usePluginAction`).
  *
- * There are none. This plugin serves a static artifact, so every surface is a
- * read and every write an operator needs goes through the host's own config API
- * on `/api/plugins/:pluginId/config` (the same path the reference plugin's UI
- * uses for its text fields). A registered action with no caller would be dead
- * weight the bridge-keys test would have to exempt, so the table is empty
- * rather than aspirational.
+ * One, and it does not write the corpus. The plugin cannot fetch anything — the
+ * runtime gives it no way to spawn a process — so a refresh is a *request* written
+ * into a declared local folder, for a runner on the host to honour. That is why
+ * this is an operator action rather than something an agent can reach: the corpus
+ * is a trust input, and whoever can write it decides what every other agent
+ * believes.
  */
-export const ACTION_KEYS = {} as const;
+export const ACTION_KEYS = {
+  /**
+   * Write a refresh request for this company. Returns the outcome, including the
+   * reason nothing was written — "refresh is off" and "already fresh" are
+   * different states an operator chasing a missing rebuild needs to tell apart.
+   */
+  requestRefresh: "request-refresh",
+} as const;
 
 /**
  * Keys the worker registers that no UI surface calls.

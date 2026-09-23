@@ -15,7 +15,7 @@
 
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
-import { PLUGIN_ID, PLUGIN_VERSION } from "./constants.js";
+import { PLUGIN_ID, PLUGIN_VERSION, REQUESTS_FOLDER_KEY } from "./constants.js";
 import { INSTANCE_CONFIG_SCHEMA } from "./config.js";
 import { DOC_TOOL_SPECS, toJsonSchema } from "./tools/catalog.js";
 
@@ -34,10 +34,27 @@ const manifest: PaperclipPluginManifestV1 = {
     // Required by the settingsPage slot below. The host validates this pairing
     // and rejects the manifest without it, naming the capability in the error.
     "instance.settings.register",
-    // Nothing else. The corpus is read with `node:fs` directly, so there is no
-    // `local.folders` declaration to make and no state to persist: this plugin
-    // owns no data, it only reads an artifact the operator already built.
+    // The corpus is *read* with `node:fs` (no declaration needed), but a refresh
+    // request is *written* — and the moment this plugin writes, the write is
+    // declared and contained to a folder the operator chose, rather than being a
+    // quiet `node:fs` call. `local.folders` covers exactly that one folder.
+    "local.folders",
+    // No `jobs.schedule`. A scheduled job is plugin-wide, but this configuration is
+    // per-company — so a job could only check every company by reading the company
+    // list and depending on each one having configured its request folder. The
+    // schedule belongs to the runner instead, which is the process that is actually
+    // running continuously, and the plugin writes requests on demand.
   ],
+  localFolders: [
+    {
+      folderKey: REQUESTS_FOLDER_KEY,
+      displayName: "Build requests",
+      description:
+        "Where this plugin writes a refresh request for a host-side runner to pick up. Nothing else is written here, and the corpus itself is never modified.",
+      access: "readWrite",
+    },
+  ],
+
   entrypoints: {
     worker: "./dist/worker.js",
     ui: "./dist/ui",

@@ -12,7 +12,7 @@
 export const PLUGIN_ID = "paperclip-docs";
 
 /** Manifest version; keep in sync with package.json. */
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.2.0";
 
 /**
  * Where the corpus lives when the operator has not said otherwise.
@@ -136,3 +136,32 @@ export type PathRefusalCode =
   | "path_traversal"
   | "symlink_escape"
   | "invalid_path";
+
+/**
+ * The declared local folder build requests are written into.
+ *
+ * Declared through `local.folders` rather than written with `node:fs` like the
+ * corpus read is: this plugin's whole trust story is that it reads an artifact and
+ * owns nothing, so the moment it writes, the write is declared, contained to a
+ * folder the operator chose, and visible in the capability list.
+ */
+export const REQUESTS_FOLDER_KEY = "docs-requests";
+
+/** One file, replaced atomically: a runner takes the newest and needs no queue. */
+export const REQUEST_FILENAME = "request.json";
+
+/** The request shape the runner understands; it refuses one it does not know. */
+export const REFRESH_REQUEST_SCHEMA = 1;
+
+/** `refresh.maxAgeDays`: how old the corpus may get before a rebuild is asked for. */
+export const DEFAULT_REFRESH_MAX_AGE_DAYS = 30;
+export const MIN_REFRESH_MAX_AGE_DAYS = 1;
+export const MAX_REFRESH_MAX_AGE_DAYS = 3_650;
+
+/** Source kinds the runner knows how to fetch. */
+export const SOURCE_KINDS = ["git", "wiki", "llms", "local"] as const;
+export type SourceKind = (typeof SOURCE_KINDS)[number];
+
+/** Conversions the runner knows how to apply. */
+export const SOURCE_CONVERSIONS = ["auto", "rst", "mdx", "none"] as const;
+export type SourceConversion = (typeof SOURCE_CONVERSIONS)[number];

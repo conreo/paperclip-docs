@@ -63,6 +63,10 @@ describe("normalizeConfig accepts a full valid document", () => {
       allowedBundles: ["n8n", "grafana"],
       maxResults: 25,
       maxDocChars: 12_000,
+      // The registry and the refresh policy default when a document predates them,
+      // which is what keeps an older saved config loadable.
+      refresh: { enabled: false, maxAgeDays: 30 },
+      sources: [],
     });
   });
 
@@ -147,13 +151,15 @@ describe("INSTANCE_CONFIG_SCHEMA", () => {
     expect(INSTANCE_CONFIG_SCHEMA["additionalProperties"]).toBe(false);
   });
 
-  it("exposes exactly the five documented keys", () => {
+  it("exposes exactly the documented keys", () => {
     expect(Object.keys(properties).sort()).toEqual([
       "allowedBundles",
       "corpusRoot",
       "enabled",
       "maxDocChars",
       "maxResults",
+      "refresh",
+      "sources",
     ]);
     expect(settableConfigKeys().sort()).toEqual(Object.keys(properties).sort());
   });

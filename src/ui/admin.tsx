@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  usePluginAction,
   usePluginData,
   usePluginToast,
   type PluginSettingsPageProps,
@@ -34,7 +35,7 @@ import {
 import { CORPUS_AGE_WARNING_DAYS, PLUGIN_ID } from "../constants.js";
 import { operatorConfigForSave, readOperatorConfig, type OperatorConfig } from "../config.js";
 import { sanitizeErrorMessage } from "../errors.js";
-import { DATA_KEYS } from "../plugin-keys.js";
+import { ACTION_KEYS, DATA_KEYS } from "../plugin-keys.js";
 import { StatusLine, styles, thumbTransform } from "./chrome.js";
 
 /** The worker's status payload; keep in step with `StatusPayload` in handlers.ts. */
@@ -309,6 +310,33 @@ function Configuration({
     };
   }, [path]);
 
+  /**
+   * Ask the host to write a refresh request.
+   *
+   * The outcome is reported rather than assumed: "refresh is off", "no sources are
+   * declared" and "the request was written" are three different answers, and an
+   * operator pressing a button deserves the one that is true.
+   */
+  const runRequestRefresh = usePluginAction(ACTION_KEYS.requestRefresh);
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const requestRefresh = useCallback(async () => {
+    setRefreshBusy(true);
+    try {
+      const outcome = (await runRequestRefresh({ companyId })) as
+        | { written?: boolean; skipped?: string; path?: string; policy?: string }
+        | undefined;
+      if (outcome?.written) {
+        onMessage(`Rebuild requested (${outcome.path}). ${outcome.policy ?? ""}`.trim(), "success");
+      } else {
+        onMessage(`No request written: ${outcome?.skipped ?? "the host returned nothing"}`, "error");
+      }
+    } catch (error) {
+      onMessage(sanitizeErrorMessage(error), "error");
+    } finally {
+      setRefreshBusy(false);
+    }
+  }, [runRequestRefresh, companyId, onMessage]);
+
   /** Write one change immediately, the way a General settings switch does. */
   const write = useCallback(
     async (edits: Partial<OperatorConfig>, announce?: string) => {
@@ -461,7 +489,70 @@ function Configuration({
           }}
         />
       </Section>
+
+      <Section
+        title="Rebuilding"
+        description="This plugin cannot fetch anything: the runtime gives it no way to run git or pandoc. Collaborating with a runner on the host, it writes a request; the runner performs the build and writes the corpus."
+      >
+        <Field
+          value={String(draft.refresh.maxAgeDays)}
+          disabled={busy}
+          placeholder="30"
+          label="Rebuild when older than (days)"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3_650) {
+              onMessage("The rebuild age must be between 1 and 3650 days.", "error");
+              return;
+            }
+            void write(
+              { refresh: { ...draft.refresh, maxAgeDays: parsed } },
+              "Rebuild age updated.",
+            );
+          }}
+        />
+        <div style={styles.row}>
+          <Button
+            label={refreshBusy ? "Requesting…" : "Request a rebuild now"}
+            disabled={refreshBusy}
+            onClick={() => void requestRefresh()}
+          />
+          <span style={styles.hint}>
+            Writes a request for this organization. Nothing is fetched by the plugin.
+          </span>
+        </div>
+      </Section>
     </>
+  );
+}
+
+/** The one button this page needs, kept local so it matches the surrounding style. */
+function Button({
+  label,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "6px 12px",
+        borderRadius: 6,
+        border: "1px solid var(--border, #d0d5dd)",
+        background: "transparent",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

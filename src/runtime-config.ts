@@ -26,13 +26,41 @@ import {
   DEFAULT_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
+  DEFAULT_REFRESH_MAX_AGE_DAYS,
   MAX_ARG_STRING_CHARS,
   MAX_MAX_DOC_CHARS,
   MAX_MAX_RESULTS,
+  MAX_REFRESH_MAX_AGE_DAYS,
   MIN_MAX_DOC_CHARS,
   MIN_MAX_RESULTS,
+  MIN_REFRESH_MAX_AGE_DAYS,
+  SOURCE_CONVERSIONS,
+  SOURCE_KINDS,
+  type SourceConversion,
+  type SourceKind,
 } from "./constants.js";
 import { ConfigError, settableConfigKeys } from "./config.js";
+
+/** One entry of an organization's source registry, after normalisation. */
+export interface RuntimeSourceDeclaration {
+  /** Bundle name. Also the directory the build writes, so it is a plain name. */
+  id: string;
+  title: string;
+  kind: SourceKind;
+  repo: string;
+  url: string;
+  ref: string;
+  path: string;
+  convert: SourceConversion;
+  include: string[];
+  exclude: string[];
+  tags: string[];
+}
+
+export interface RuntimeRefreshConfig {
+  enabled: boolean;
+  maxAgeDays: number;
+}
 
 /** The full runtime surface after defaults are applied. */
 export interface RuntimeConfig {
@@ -45,7 +73,14 @@ export interface RuntimeConfig {
   maxResults: number;
   /** Character cap for one `read_doc` body. */
   maxDocChars: number;
+  /** Whether, and how eagerly, to ask a host-side runner for a rebuild. */
+  refresh: RuntimeRefreshConfig;
+  /** What this organization wants built. Read only to write a refresh request. */
+  sources: RuntimeSourceDeclaration[];
 }
+
+/** A registry this large is a mistake, not an intention. */
+const MAX_SOURCES = 200;
 
 /**
  * Expand a leading `~` against a home directory.
@@ -66,6 +101,8 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   allowedBundles: [],
   maxResults: DEFAULT_MAX_RESULTS,
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
+  refresh: { enabled: false, maxAgeDays: DEFAULT_REFRESH_MAX_AGE_DAYS },
+  sources: [],
 };
 
 function readBool(
@@ -161,6 +198,142 @@ function assertKnownKeys(raw: Record<string, unknown>): void {
   }
 }
 
+function readRefresh(raw: unknown): RuntimeRefreshConfig {
+  if (raw === undefined || raw === null) return { ...DEFAULT_RUNTIME_CONFIG.refresh };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError("must be an object", "refresh");
+  }
+  const record = raw as Record<string, unknown>;
+  const unknownKey = Object.keys(record).find((key) => key !== "enabled" && key !== "maxAgeDays");
+  if (unknownKey) {
+    throw new ConfigError("accepts only `enabled` and `maxAgeDays`", `refresh.${unknownKey}`);
+  }
+  const enabled = record["enabled"];
+  if (enabled !== undefined && typeof enabled !== "boolean") {
+    throw new ConfigError("must be a boolean", "refresh.enabled");
+  }
+  const maxAgeDays = record["maxAgeDays"];
+  if (maxAgeDays !== undefined) {
+    if (typeof maxAgeDays !== "number" || !Number.isFinite(maxAgeDays)) {
+      throw new ConfigError("must be a finite number", "refresh.maxAgeDays");
+    }
+    if (maxAgeDays < MIN_REFRESH_MAX_AGE_DAYS || maxAgeDays > MAX_REFRESH_MAX_AGE_DAYS) {
+      throw new ConfigError(
+        `must be between ${MIN_REFRESH_MAX_AGE_DAYS} and ${MAX_REFRESH_MAX_AGE_DAYS}`,
+        "refresh.maxAgeDays",
+      );
+    }
+  }
+  return {
+    enabled: enabled ?? DEFAULT_RUNTIME_CONFIG.refresh.enabled,
+    maxAgeDays: Math.floor(maxAgeDays ?? DEFAULT_RUNTIME_CONFIG.refresh.maxAgeDays),
+  };
+}
+
+function sourceString(
+  record: Record<string, unknown>,
+  key: string,
+  field: string,
+  fallback = "",
+): string {
+  const value = record[key];
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string") throw new ConfigError("must be a string", field);
+  const trimmed = value.trim();
+  if (trimmed.length > MAX_ARG_STRING_CHARS) throw new ConfigError("is too long", field);
+  return trimmed;
+}
+
+function sourceStringArray(
+  record: Record<string, unknown>,
+  key: string,
+  field: string,
+): string[] {
+  const value = record[key];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new ConfigError("must be an array of strings", field);
+  return value.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new ConfigError(`entry ${index} must be a non-empty string`, field);
+    }
+    const trimmed = entry.trim();
+    if (trimmed.length > MAX_ARG_STRING_CHARS) {
+      throw new ConfigError(`entry ${index} is too long`, field);
+    }
+    return trimmed;
+  });
+}
+
+/**
+ * The registry, strictly.
+ *
+ * Strict here rather than lenient like the form reader, because this is the half a
+ * runner acts on: a source missing its repository would otherwise be written into a
+ * request file, silently fetched as nothing, and reported as a corpus that simply
+ * has fewer pages. Naming the offending entry is the difference between a typo and a
+ * mystery.
+ */
+function readSources(raw: unknown): RuntimeSourceDeclaration[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new ConfigError("must be an array", "sources");
+  if (raw.length > MAX_SOURCES) {
+    throw new ConfigError(`must have at most ${MAX_SOURCES} entries`, "sources");
+  }
+
+  const seen = new Set<string>();
+  return raw.map((entry, index) => {
+    const field = `sources[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new ConfigError("must be an object", field);
+    }
+    const record = entry as Record<string, unknown>;
+
+    const id = sourceString(record, "id", `${field}.id`);
+    if (!id) throw new ConfigError("is required", `${field}.id`);
+    // The id becomes a directory name in the corpus and a bundle name in an
+    // allowlist, so it is a plain name for the same reason an allowlist entry is.
+    if (id.includes("/") || id.includes("\\") || id.includes("..")) {
+      throw new ConfigError("must be a plain bundle name, not a path", `${field}.id`);
+    }
+    if (seen.has(id)) {
+      throw new ConfigError(`duplicate id "${id}"; two sources cannot write one bundle`, `${field}.id`);
+    }
+    seen.add(id);
+
+    const kind = sourceString(record, "kind", `${field}.kind`);
+    if (!SOURCE_KINDS.includes(kind as SourceKind)) {
+      throw new ConfigError(`must be one of: ${SOURCE_KINDS.join(", ")}`, `${field}.kind`);
+    }
+    const convert = sourceString(record, "convert", `${field}.convert`, "auto");
+    if (!SOURCE_CONVERSIONS.includes(convert as SourceConversion)) {
+      throw new ConfigError(`must be one of: ${SOURCE_CONVERSIONS.join(", ")}`, `${field}.convert`);
+    }
+
+    const repo = sourceString(record, "repo", `${field}.repo`);
+    const url = sourceString(record, "url", `${field}.url`);
+    if ((kind === "git" || kind === "wiki") && !repo) {
+      throw new ConfigError(`is required for a ${kind} source`, `${field}.repo`);
+    }
+    if (kind === "llms" && !url) {
+      throw new ConfigError("is required for an llms source", `${field}.url`);
+    }
+
+    return {
+      id,
+      title: sourceString(record, "title", `${field}.title`, id),
+      kind: kind as SourceKind,
+      repo,
+      url,
+      ref: sourceString(record, "ref", `${field}.ref`),
+      path: sourceString(record, "path", `${field}.path`),
+      convert: convert as SourceConversion,
+      include: sourceStringArray(record, "include", `${field}.include`),
+      exclude: sourceStringArray(record, "exclude", `${field}.exclude`),
+      tags: sourceStringArray(record, "tags", `${field}.tags`),
+    };
+  });
+}
+
 /**
  * Normalize raw host config into {@link RuntimeConfig}.
  *
@@ -195,6 +368,8 @@ export function normalizeConfig(
 
   return {
     enabled: readBool(raw, "enabled", DEFAULT_RUNTIME_CONFIG.enabled),
+    refresh: readRefresh(raw["refresh"]),
+    sources: readSources(raw["sources"]),
     corpusRoot,
     allowedBundles: readStringArray(raw, "allowedBundles"),
     maxResults: readNumber(

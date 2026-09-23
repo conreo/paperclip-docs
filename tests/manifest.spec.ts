@@ -17,7 +17,9 @@
 import { describe, expect, it } from "vitest";
 
 import manifest from "../src/manifest.js";
-import { DOC_TOOLS, PLUGIN_ID, PLUGIN_VERSION } from "../src/constants.js";
+import { readFileSync } from "node:fs";
+
+import { DOC_TOOLS, PLUGIN_ID, PLUGIN_VERSION, REQUESTS_FOLDER_KEY } from "../src/constants.js";
 
 describe("manifest", () => {
   it("identifies the plugin and its API version", () => {
@@ -25,7 +27,7 @@ describe("manifest", () => {
     expect(manifest.id).toBe("paperclip-docs");
     expect(manifest.apiVersion).toBe(1);
     expect(manifest.version).toBe(PLUGIN_VERSION);
-    expect(manifest.version).toBe("0.1.0");
+    expect(manifest.version).toBe("0.2.0");
   });
 
   it("points the host at the built worker and UI bundles", () => {
@@ -37,22 +39,43 @@ describe("manifest", () => {
     expect([...manifest.capabilities].sort()).toEqual([
       "agent.tools.register",
       "instance.settings.register",
+      // Writes one request file into a folder the operator declares. The corpus
+      // itself is still only read, with `node:fs`.
+      "local.folders",
     ]);
   });
 
+  it("declares a local-folder capability only because it writes one", () => {
+    // This replaces a test that asserted `local.folders` was absent. Absence was
+    // the right claim until refresh requests existed; now the claim that matters is
+    // that the capability is *used*, so it is checked against the source rather
+    // than against a wish.
+    const worker = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
+    expect(worker).toContain("ctx.localFolders");
+    // And that the write goes to a declared folder, not to an arbitrary path.
+    expect(manifest.localFolders?.map((folder) => folder.folderKey)).toEqual([REQUESTS_FOLDER_KEY]);
+    expect(manifest.localFolders?.[0]?.access).toBe("readWrite");
+  });
+
   it("does not claim a capability it has no use for", () => {
-    // Least privilege: no sidebar, no page route, no local-folder access, no
-    // state. A capability wider than the feature is a permission an operator
-    // grants for nothing.
+    // Least privilege: no sidebar, no page route, no plugin-owned state, and no
+    // company enumeration — the last one is what a scheduled job would have needed.
     for (const unwanted of [
       "ui.sidebar.register",
       "ui.page.register",
-      "local.folders",
       "plugin.state.write",
       "companies.read",
+      "jobs.schedule",
     ]) {
       expect(manifest.capabilities).not.toContain(unwanted);
     }
+  });
+
+  it("declares no scheduled job, because the runner owns the schedule", () => {
+    // A job is plugin-wide and this configuration is per-company, so a job could
+    // only check every company by enumerating them. The runner runs continuously
+    // and already has a schedule; the plugin writes requests on demand.
+    expect(manifest.jobs ?? []).toHaveLength(0);
   });
 
   it("takes the settingsPage slot and nothing else", () => {
@@ -97,6 +120,8 @@ describe("manifest", () => {
       "enabled",
       "maxDocChars",
       "maxResults",
+      "refresh",
+      "sources",
     ]);
   });
 });
