@@ -23,7 +23,7 @@
  */
 
 import {
-  DEFAULT_CORPUS_ROOT,
+  EXAMPLE_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
   DEFAULT_RAG_TOP_K,
@@ -60,15 +60,15 @@ export const INSTANCE_CONFIG_SCHEMA: Record<string, unknown> = {
       type: "string",
       title: "Corpus directory",
       description:
-        "The OKF bundle directory to serve. `~` is expanded to the worker user's home. Absolute paths only.",
-      default: DEFAULT_CORPUS_ROOT,
+        "The OKF bundle directory to serve for this organization, and only this organization. Empty means none is configured, and the tools refuse rather than falling back to another organization's corpus. `~` expands to the worker user's home; absolute paths only.",
+      default: "",
     },
     allowedBundles: {
       type: "array",
       items: { type: "string" },
       title: "Bundles agents may read",
       description:
-        "Which parts of the corpus this organization may read; empty means all of it. Set from the list of bundles that are actually in the corpus, not typed: unticking one removes it. Enforced on search, browsing and reading alike, so naming a page in a bundle that is not listed is refused rather than merely hidden. It does not decide which agents may call these tools — that is the tool grants on each agent.",
+        "Which parts of the corpus this organization may read. Nothing is granted by default: a bundle must be ticked before any agent can see it. Set from the list of bundles that are actually in the corpus, not typed. Enforced on search, browsing and reading alike, so naming a page in a bundle that is not granted is refused rather than merely hidden. It does not decide which agents may call these tools — that is the tool grants on each agent.",
       default: [],
     },
     maxResults: {
@@ -226,7 +226,9 @@ export interface OperatorConfig {
 /** The schema defaults, which is what an unconfigured plugin behaves as. */
 export const OPERATOR_CONFIG_DEFAULTS: OperatorConfig = {
   enabled: false,
-  corpusRoot: DEFAULT_CORPUS_ROOT,
+  // No shared default. One corpus root for every organization is exactly how a
+  // multi-tenant instance ends up showing one organization another's documents.
+  corpusRoot: "",
   allowedBundles: [],
   maxResults: DEFAULT_MAX_RESULTS,
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
@@ -280,10 +282,7 @@ export function readOperatorConfig(raw: unknown): OperatorConfig {
 
   return {
     enabled: operatorBool(record, "enabled", OPERATOR_CONFIG_DEFAULTS.enabled),
-    corpusRoot:
-      typeof root === "string" && root.trim().length > 0
-        ? root.trim()
-        : OPERATOR_CONFIG_DEFAULTS.corpusRoot,
+    corpusRoot: typeof root === "string" ? root.trim() : OPERATOR_CONFIG_DEFAULTS.corpusRoot,
     allowedBundles: bundles,
     maxResults: operatorNumber(
       record,
@@ -377,50 +376,47 @@ function readOperatorSources(raw: unknown): OperatorSource[] {
 }
 
 /**
- * The allowlist after an operator ticks or unticks one bundle.
+ * Whether this organization may read a bundle.
  *
- * ## Why this is a function and not two lines in the component
+ * ## Deny by default, and why that replaced "empty means everything"
  *
- * The stored value has a special case — empty means *every* bundle — and that case
- * is load-bearing: it is what lets a corpus grow without silently hiding new
- * bundles. Anything that turns a real list back into the empty one by accident
- * widens access, and anything that fails to turn a complete list back into the empty
- * one means a newly built bundle arrives invisible to every agent.
+ * The first version treated an empty allowlist as *every* bundle, reasoning that a
+ * single-tenant install should not have to enumerate its own corpus. On a
+ * multi-tenant instance that is a disclosure: every organization inherits the same
+ * corpus root, so "everything" meant every other organization's documentation, and an
+ * organization nobody had configured could read material that was never meant for it.
  *
- * So the rule is written once, here, and tested:
- *
- *   - empty means "everything discovered", which is the state the page shows first;
- *   - ticking or unticking is applied to that effective set;
- *   - the result is stored as the empty list **only** when it covers every discovered
- *     bundle and names nothing else. A set that covers everything *and* carries a
- *     stale name is stored as a list, because canonicalising it would quietly grant
- *     whatever gets built next.
+ * The rule is now the ordinary one for a boundary — you may read what you have been
+ * granted, and nothing else. The cost is one tick per bundle on the settings page.
  */
-/**
- * The bundles this organization may read, out of the ones the corpus has.
- *
- * The same "empty means everything" rule {@link toggleBundle} stores, applied for
- * display: the page renders one row per discovered bundle, so nothing can be hidden
- * by the config not mentioning it.
- */
-export function effectiveBundles(discovered: string[], allowed: string[]): string[] {
-  return allowed.length > 0 ? allowed : discovered;
+export function permitsBundle(allowed: readonly string[], bundle: string): boolean {
+  return allowed.includes(bundle);
 }
 
+/** The granted bundles the corpus actually has. Stale names are reported separately. */
+export function effectiveBundles(discovered: string[], allowed: string[]): string[] {
+  return allowed.filter((name) => discovered.includes(name));
+}
+
+/**
+ * The grant after an operator ticks or unticks one bundle.
+ *
+ * Written once, here, and tested, because it is the only thing that decides what an
+ * organization may read. The earlier version collapsed a complete set back to the
+ * empty list — which meant *everything* — and that subtlety was the disclosure. There
+ * is no canonical form to get wrong any more: the list is the grant, verbatim.
+ */
 export function toggleBundle(
   discovered: string[],
   allowed: string[],
   bundle: string,
   keep: boolean,
 ): string[] {
-  const effective = new Set(allowed.length > 0 ? allowed : discovered);
-  if (keep) effective.add(bundle);
-  else effective.delete(bundle);
-
-  const coversEverything = discovered.every((name) => effective.has(name));
-  const namesSomethingElse = [...effective].some((name) => !discovered.includes(name));
-  if (coversEverything && !namesSomethingElse) return [];
-  return [...effective].sort();
+  void discovered; // the page has it; kept in the signature so callers read clearly
+  const grant = new Set(allowed);
+  if (keep) grant.add(bundle);
+  else grant.delete(bundle);
+  return [...grant].sort();
 }
 
 export interface SavePayload {

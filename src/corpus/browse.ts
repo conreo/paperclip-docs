@@ -197,9 +197,7 @@ function synthesize(
 /** Bundle inventory for the corpus root when there is no root `index.md`. */
 function bundleListing(index: CorpusIndex, allowed: readonly string[]): BrowseResult {
   const permitted = new Set(allowed);
-  const bundles = index.bundles.filter(
-    (bundle) => permitted.size === 0 || permitted.has(bundle.name),
-  );
+  const bundles = index.bundles.filter((bundle) => permitted.has(bundle.name));
   const entries: ListingEntry[] = bundles.map((bundle) => {
     const indexId = `${bundle.name}/${INDEX_FILENAME}`;
     const hasIndex = index.concepts.some((record) => record.conceptId === indexId);
@@ -296,7 +294,8 @@ export async function browseCorpus(
     return bundleListing(index, options.allowedBundles);
   }
 
-  if (permitted.size > 0 && !permitted.has(bundle)) {
+  // Deny by default: an empty grant permits nothing.
+  if (!permitted.has(bundle)) {
     return emptyResult({
       kind: "listing",
       bundle,

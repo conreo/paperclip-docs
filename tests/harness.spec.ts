@@ -53,7 +53,7 @@ describe("the plugin under the host harness", () => {
   async function boot(overrides: Record<string, unknown> = {}): Promise<TestHarness> {
     const harness = createTestHarness({
       manifest,
-      config: { enabled: true, corpusRoot: fixture.root, ...overrides },
+      config: { enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"], ...overrides },
     });
     await setup(harness.ctx);
     return harness;
@@ -100,7 +100,7 @@ describe("the plugin under the host harness", () => {
     // handler reads `ctx.config.get(companyId)` from the *run context*.
     const harness = createTestHarness({
       manifest,
-      config: { enabled: false, corpusRoot: fixture.root },
+      config: { enabled: false, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] },
     });
     await setup(harness.ctx);
     const result = await call(harness, "search_docs", { query: "webhook" });

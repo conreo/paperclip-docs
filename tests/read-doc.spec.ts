@@ -22,7 +22,7 @@ let config: RuntimeConfig;
 
 beforeEach(async () => {
   fixture = await standardCorpus();
-  config = normalizeConfig({ enabled: true, corpusRoot: fixture.root, maxDocChars: CAP });
+  config = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"], maxDocChars: CAP });
 });
 
 afterEach(async () => {
@@ -50,7 +50,7 @@ describe("read_doc truncation", () => {
   });
 
   it("does not truncate or mark a document under the cap", async () => {
-    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root, maxDocChars: 40_000 });
+    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"], maxDocChars: 40_000 });
     const outcome = await readDoc(store, roomy, { concept_id: "alpha/long.md" });
     expect(outcome.content).not.toContain("truncated at");
     const data = outcome.data as { truncated: boolean };
@@ -68,7 +68,7 @@ describe("read_doc truncation", () => {
 
 describe("read_doc metadata", () => {
   it("returns frontmatter and the parsed fields", async () => {
-    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root });
+    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const outcome = await readDoc(store, roomy, { concept_id: "alpha/webhooks.md" });
     const data = outcome.data as {
       title: string;
@@ -87,7 +87,7 @@ describe("read_doc metadata", () => {
   });
 
   it("notes a frontmatter parse failure without failing the read", async () => {
-    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root });
+    const roomy = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const outcome = await readDoc(store, roomy, { concept_id: "alpha/broken.md" });
     expect(outcome.error).toBeUndefined();
     expect(outcome.content).toContain("did not fully parse");
@@ -98,18 +98,25 @@ describe("read_doc metadata", () => {
 describe("read_doc failures are results, not exceptions", () => {
   it("returns an error string for a missing concept", async () => {
     const outcome = await readDoc(store, config, { concept_id: "nope/missing.md" });
-    expect(outcome.error).toMatch(/No documentation concept/);
+    // The bundle is refused before its contents are looked at, so this reports the
+    // bundle rather than a missing concept — an ungranted bundle should not reveal
+    // whether a named concept exists inside it.
+    expect(outcome.error).toMatch(/not available/);
     expect(outcome.content).toBeUndefined();
   });
 
   it("returns an error string for a path that escapes the corpus", async () => {
-    const outcome = await readDoc(store, config, { concept_id: "../etc/passwd" });
+    // Through a *granted* bundle, so it is the path check that refuses rather than
+    // the allowlist: `alpha` is readable, `../../..` is not.
+    const outcome = await readDoc(store, config, { concept_id: "alpha/../../../../etc/passwd" });
     expect(outcome.error).toMatch(/Refused/);
   });
 
   it("returns an error string for an absolute path", async () => {
     const outcome = await readDoc(store, config, { concept_id: "/etc/passwd" });
-    expect(outcome.error).toMatch(/Refused/);
+    // Either refusal is correct here: an absolute concept id names no granted bundle,
+    // so the allowlist answers first — and never reaches the filesystem at all.
+    expect(outcome.error).toMatch(/Refused|not available/);
   });
 
   it("returns a clean error when concept_id is missing", async () => {

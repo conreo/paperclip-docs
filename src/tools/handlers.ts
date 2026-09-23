@@ -24,7 +24,24 @@ import { browseCorpus } from "../corpus/browse.js";
 import { hitForConcept, searchConcepts, type SearchHit } from "../corpus/search.js";
 import { blendWithKeyword } from "../rag.js";
 import { CorpusUnavailable, readConcept, type CorpusStatus, type CorpusStore } from "../corpus/store.js";
+import { permitsBundle } from "../config.js";
 import { stringArg, numberArg } from "./validate.js";
+
+/**
+ * The refusal for an organization with no corpus of its own.
+ *
+ * Empty is a state, not a fallback: before this existed, an organization whose
+ * configuration nobody had touched inherited the same corpus root as everyone else
+ * and could read everything in it. Saying so plainly is better than an empty result,
+ * which reads like a corpus that simply has nothing relevant.
+ */
+export function corpusUnconfigured(config: RuntimeConfig): ToolOutcome | null {
+  if (config.corpusRoot.trim().length > 0) return null;
+  return {
+    error:
+      "No documentation corpus is configured for this organization. An operator sets the corpus directory in Settings → Plugins → Docs; until then these tools refuse rather than serving another organization's corpus.",
+  };
+}
 
 /**
  * Structural match for the SDK's `ToolResult`; avoids importing it at runtime.
@@ -77,7 +94,7 @@ export async function searchDocs(
   const limit = Math.max(1, Math.min(requested, config.maxResults));
 
   const allowed = config.allowedBundles;
-  if (bundle !== null && allowed.length > 0 && !allowed.includes(bundle)) {
+  if (bundle !== null && !permitsBundle(allowed, bundle)) {
     return {
       content: `The bundle "${bundle}" is not available on this instance. Available bundles: ${allowed.join(", ")}.`,
       data: { mode: "all", count: 0, considered: 0, more: false, results: [], bundleAllowed: false },
@@ -206,6 +223,9 @@ export async function readDoc(
   // serving the index's capped prefix, because a reader that returned the prefix
   // would silently cut off long pages while claiming to return the document.
   void store;
+  const unconfigured = corpusUnconfigured(config);
+  if (unconfigured) return unconfigured;
+
   const conceptId = stringArg(args, "concept_id");
   if (conceptId === null) {
     return { error: 'Parameter "concept_id" is required and must be a non-empty string' };
@@ -220,7 +240,7 @@ export async function readDoc(
   // plugin has. Checked before the file is read rather than after, so an ungranted
   // document is never opened.
   const requestedBundle = conceptId.split(/[\\/]+/).filter((part) => part.length > 0)[0] ?? "";
-  if (config.allowedBundles.length > 0 && !config.allowedBundles.includes(requestedBundle)) {
+  if (!permitsBundle(config.allowedBundles, requestedBundle)) {
     return {
       error:
         `The bundle "${requestedBundle}" is not available on this instance. ` +
@@ -297,6 +317,8 @@ export async function listDocs(
   config: RuntimeConfig,
   args: Record<string, unknown>,
 ): Promise<ToolOutcome> {
+  const unconfigured = corpusUnconfigured(config);
+  if (unconfigured) return unconfigured;
   const bundle = stringArg(args, "bundle");
   const path = stringArg(args, "path");
 
@@ -418,6 +440,9 @@ export async function sources(
   config: RuntimeConfig,
   options: { now?: number } = {},
 ): Promise<ToolOutcome> {
+  const unconfigured = corpusUnconfigured(config);
+  if (unconfigured) return unconfigured;
+
   const status = await store.describe(config.corpusRoot, options);
 
   const lines: string[] = [];
@@ -436,10 +461,9 @@ export async function sources(
   // the whole corpus. An agent does not: telling it that `beta` holds 3 concepts and
   // then refusing to read them is a boundary that announces itself and then refuses,
   // which reads as a fault rather than as policy.
-  const visible =
-    config.allowedBundles.length === 0
-      ? status.bundles
-      : status.bundles.filter((bundle) => config.allowedBundles.includes(bundle.name));
+  const visible = status.bundles.filter((bundle) =>
+    permitsBundle(config.allowedBundles, bundle.name),
+  );
   const visibleConcepts = visible.reduce((total, bundle) => total + bundle.conceptCount, 0);
 
   lines.push(`Bundles: ${visible.length} · concepts: ${visibleConcepts}`);

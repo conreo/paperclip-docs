@@ -209,7 +209,8 @@ export function searchConcepts(
   const allowed = new Set(options.allowedBundles);
 
   const candidates = index.concepts.filter((record) => {
-    if (allowed.size > 0 && !allowed.has(record.bundle)) return false;
+    // Deny by default: an empty grant permits nothing.
+    if (!allowed.has(record.bundle)) return false;
     if (options.bundle !== undefined && record.bundle !== options.bundle) return false;
     if (options.type !== undefined && record.type.toLowerCase() !== options.type.toLowerCase()) {
       return false;

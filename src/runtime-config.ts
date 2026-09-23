@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  DEFAULT_CORPUS_ROOT,
+  EXAMPLE_CORPUS_ROOT,
   DEFAULT_MAX_DOC_CHARS,
   DEFAULT_MAX_RESULTS,
   DEFAULT_RAG_TOP_K,
@@ -122,7 +122,9 @@ export function expandHome(value: string, home: string = os.homedir()): string {
 /** The defaults, with `corpusRoot` already expanded. */
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   enabled: false,
-  corpusRoot: expandHome(DEFAULT_CORPUS_ROOT),
+  // Empty: this organization has no corpus until one is named for it. See
+  // `EXAMPLE_CORPUS_ROOT` for why there is no shared default.
+  corpusRoot: "",
   allowedBundles: [],
   maxResults: DEFAULT_MAX_RESULTS,
   maxDocChars: DEFAULT_MAX_DOC_CHARS,
@@ -442,7 +444,7 @@ export function normalizeConfig(
     // The default root is stored with a `~`, so even the "no config at all"
     // path has to expand it — otherwise a caller that never configured the
     // plugin would be handed a literal tilde as a filesystem path.
-    return { ...DEFAULT_RUNTIME_CONFIG, corpusRoot: expandHome(DEFAULT_CORPUS_ROOT, home) };
+    return { ...DEFAULT_RUNTIME_CONFIG };
   }
   if (typeof input !== "object" || Array.isArray(input)) {
     throw new ConfigError("must be an object", "$");
@@ -450,11 +452,17 @@ export function normalizeConfig(
   const raw = input as Record<string, unknown>;
   assertKnownKeys(raw);
 
-  const rawRoot = readString(raw, "corpusRoot", DEFAULT_CORPUS_ROOT, 4_096);
-  const corpusRoot = path.normalize(expandHome(rawRoot, home));
-  if (!path.isAbsolute(corpusRoot)) {
-    // A relative root would resolve against the worker's working directory,
-    // which is the host's choice and not something an operator can predict.
+  // An empty root is a *state*, not an error: it means this organization has no
+  // corpus, and every tool refuses. Anything else must be an absolute path — a
+  // relative one would resolve against the worker's working directory, which is the
+  // host's choice and not something an operator can predict.
+  const rawRootValue = raw["corpusRoot"];
+  if (rawRootValue !== undefined && rawRootValue !== null && typeof rawRootValue !== "string") {
+    throw new ConfigError("must be a string", "corpusRoot");
+  }
+  const rawRoot = typeof rawRootValue === "string" ? rawRootValue.trim() : "";
+  const corpusRoot = rawRoot.length === 0 ? "" : path.normalize(expandHome(rawRoot, home));
+  if (corpusRoot.length > 0 && !path.isAbsolute(corpusRoot)) {
     throw new ConfigError("must be an absolute path, or start with `~`", "corpusRoot");
   }
 

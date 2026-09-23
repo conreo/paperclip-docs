@@ -74,7 +74,7 @@ describe("two organizations, one worker", () => {
       corpusRoot: fixture.root,
       allowedBundles: ["alpha"],
     });
-    const b = await boot({ enabled: true, corpusRoot: fixture.root });
+    const b = await boot({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     return { a, b };
   }
 
@@ -142,8 +142,8 @@ describe("two organizations, one worker", () => {
       ].join("\n"),
     });
     try {
-      const first = await boot({ enabled: true, corpusRoot: fixture.root });
-      const second = await boot({ enabled: true, corpusRoot: other.root });
+      const first = await boot({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
+      const second = await boot({ enabled: true, corpusRoot: other.root, allowedBundles: ["zeta"] });
 
       const fromFirst = await call(first, COMPANY_A, "read_doc", { concept_id: "zeta/index.md" });
       expect(fromFirst.error ?? "", "an index from another root answered this call").not.toBe("");

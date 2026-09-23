@@ -1,6 +1,6 @@
 {
   "name": "paperclip-docs",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "type": "module",
   "description": "Serve a local offline documentation corpus to Paperclip agents as governed, read-only tools: search, read, browse, and report the snapshot's age.",
   "scripts": {

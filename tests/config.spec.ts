@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 
 import {
+  permitsBundle,
   effectiveBundles,
   toggleBundle,
   ConfigError,
@@ -16,7 +17,7 @@ import {
   expandHome,
   normalizeConfig,
 } from "../src/runtime-config.js";
-import { DEFAULT_CORPUS_ROOT, DEFAULT_MAX_DOC_CHARS, DEFAULT_MAX_RESULTS } from "../src/constants.js";
+import { EXAMPLE_CORPUS_ROOT, DEFAULT_MAX_DOC_CHARS, DEFAULT_MAX_RESULTS } from "../src/constants.js";
 
 describe("normalizeConfig defaults", () => {
   it("is disabled by default", () => {
@@ -24,11 +25,13 @@ describe("normalizeConfig defaults", () => {
     expect(DEFAULT_RUNTIME_CONFIG.enabled).toBe(false);
   });
 
-  it("defaults to the documented corpus root, expanded", () => {
-    const config = normalizeConfig(undefined, { home: "/home/tester" });
-    expect(config.corpusRoot).toBe(
-      path.join("/home/tester", "offline-docs", "okf-bundles"),
-    );
+  it("defaults to no corpus at all, so nothing is served by accident", () => {
+    // There is deliberately no shared default: one corpus root for every
+    // organization is how a multi-tenant instance shows one organization another's
+    // documents. The example in the docs is not a default.
+    expect(normalizeConfig(undefined).corpusRoot).toBe("");
+    expect(normalizeConfig({ enabled: true }, { home: "/home/tester" }).corpusRoot).toBe("");
+    expect(EXAMPLE_CORPUS_ROOT).toContain("offline-docs");
   });
 
   it("defaults the allowlist to empty, meaning every bundle", () => {
@@ -41,9 +44,10 @@ describe("normalizeConfig defaults", () => {
     expect(config.maxDocChars).toBe(DEFAULT_MAX_DOC_CHARS);
   });
 
-  it("keeps the tilde in the operator-facing default", () => {
-    // The form shows what the schema documents; only the runtime expands it.
-    expect(OPERATOR_CONFIG_DEFAULTS.corpusRoot).toBe(DEFAULT_CORPUS_ROOT);
+  it("ships no corpus root at all, so no organization inherits another's", () => {
+    // There is deliberately no default with a `~` in it any more. A shared default is
+    // how every organization on a multi-tenant instance came to read the same corpus.
+    expect(OPERATOR_CONFIG_DEFAULTS.corpusRoot).toBe("");
   });
 });
 
@@ -234,43 +238,32 @@ describe("operatorConfigForSave", () => {
   });
 });
 
-describe("toggling a bundle in the allowlist", () => {
+describe("granting bundles", () => {
   const discovered = ["grafana", "n8n", "restic"];
 
-  it("starts from 'everything' when nothing is configured", () => {
-    expect(toggleBundle(discovered, [], "n8n", false)).toEqual(["grafana", "restic"]);
+  it("grants nothing until something is ticked", () => {
+    // Deny by default. The previous rule — empty means everything — is what let an
+    // organization nobody had configured read every other organization's documents.
+    expect(toggleBundle(discovered, [], "n8n", true)).toEqual(["n8n"]);
+    expect(permitsBundle([], "n8n")).toBe(false);
   });
 
-  it("stores the empty list again once everything is back on", () => {
-    // The canonical form matters: empty is what lets a corpus grow without the new
-    // bundle arriving invisible to every agent.
-    const withoutN8n = toggleBundle(discovered, [], "n8n", false);
-    expect(toggleBundle(discovered, withoutN8n, "n8n", true)).toEqual([]);
+  it("removes and restores a single bundle, with no special cases", () => {
+    const withN8n = toggleBundle(discovered, [], "n8n", true);
+    expect(toggleBundle(discovered, withN8n, "n8n", false)).toEqual([]);
   });
 
-  it("refuses to canonicalise a set that carries a name the corpus does not have", () => {
-    // It covers every discovered bundle, so a naive "is everything on?" check would
-    // collapse it to empty — which would grant whatever gets built next, including
-    // bundles nobody has seen.
-    const withStale = ["grafana", "n8n", "restic", "retired-product"];
-    expect(toggleBundle(discovered, withStale, "n8n", true)).toEqual(withStale.sort());
+  it("is the grant verbatim: ticking everything stores everything", () => {
+    // No canonical empty form to get wrong. The earlier version collapsed a complete
+    // set to [] — which meant *everything* — and that subtlety was the disclosure.
+    let grant: string[] = [];
+    for (const bundle of discovered) grant = toggleBundle(discovered, grant, bundle, true);
+    expect(grant).toEqual(["grafana", "n8n", "restic"]);
+    expect(permitsBundle(grant, "n8n")).toBe(true);
   });
 
-  it("keeps a bundle excluded when it is not in the corpus yet", () => {
-    // Deny by default survives: a bundle that is not named stays out, even while
-    // the operator is toggling something else.
-    const onlyN8n = toggleBundle(discovered, ["n8n"], "restic", false);
-    expect(onlyN8n).toEqual(["n8n"]);
-  });
-
-  it("drops a name that is no longer in the corpus once it is toggled off", () => {
-    expect(toggleBundle(discovered, ["n8n", "gone"], "gone", false)).toEqual(["n8n"]);
-  });
-
-  it("renders every discovered bundle as readable when nothing is configured", () => {
-    // The page lists what the corpus has, so an unmentioned bundle cannot be
-    // invisible — which is the failure an allowlist invites.
-    expect(effectiveBundles(discovered, [])).toEqual(discovered);
-    expect(effectiveBundles(discovered, ["n8n"])).toEqual(["n8n"]);
+  it("reports only the granted bundles the corpus actually has", () => {
+    expect(effectiveBundles(discovered, ["n8n", "gone"])).toEqual(["n8n"]);
+    expect(effectiveBundles(discovered, [])).toEqual([]);
   });
 });

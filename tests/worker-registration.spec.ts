@@ -90,13 +90,13 @@ describe("worker setup registration", () => {
     // `runWorker` is called at module scope in production. The stub proves the
     // test is exercising the definition and not a live worker: a real call would
     // have opened the stdio RPC channel.
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(runWorker).toHaveBeenCalledTimes(1);
     expect(registered.tools.size).toBe(DOC_TOOLS.length);
   });
 
   it("registers every declared tool with a JSON schema", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     for (const name of DOC_TOOLS) {
       const entry = registered.tools.get(name);
       expect(entry, `tool "${name}" was not registered`).toBeDefined();
@@ -113,7 +113,7 @@ describe("worker setup registration", () => {
   });
 
   it("registers every key in the shared registry", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     for (const key of ALL_DATA_KEYS) {
       expect([...registered.data.keys()], `data key "${key}" was not registered`).toContain(key);
     }
@@ -123,7 +123,7 @@ describe("worker setup registration", () => {
   });
 
   it("registers no key that is not in the registry", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const extraData = [...registered.data.keys()].filter((key) => !ALL_DATA_KEYS.includes(key));
     const extraActions = [...registered.actions.keys()].filter(
       (key) => !ALL_ACTION_KEYS.includes(key),
@@ -133,7 +133,7 @@ describe("worker setup registration", () => {
   });
 
   it("gives every handler a callable", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     for (const [key, handler] of registered.data) {
       expect(handler, `data handler for "${key}" is not callable`).toBeTypeOf("function");
     }
@@ -145,7 +145,7 @@ describe("worker setup registration", () => {
 
 describe("registered handlers do real work", () => {
   it("answers search_docs from the configured corpus", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const handler = registered.tools.get("search_docs")!.handler as Handler;
     const result = (await handler({ query: "webhook" }, RUN_CTX)) as {
       content?: string;
@@ -158,7 +158,7 @@ describe("registered handlers do real work", () => {
   it("clamps results to the configured ceiling", async () => {
     const registered = await loadAndSetup({
       enabled: true,
-      corpusRoot: fixture.root,
+      corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"],
       maxResults: 1,
     });
     const handler = registered.tools.get("search_docs")!.handler as Handler;
@@ -169,7 +169,7 @@ describe("registered handlers do real work", () => {
   });
 
   it("reports corpus status to the settings page", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const handler = registered.data.get(DATA_KEYS.corpusStatus) as Handler;
     const payload = (await handler({ companyId: "company-1" })) as {
       enabled: boolean;
@@ -186,7 +186,7 @@ describe("registered handlers do real work", () => {
   });
 
   it("refuses every tool while the company has it disabled", async () => {
-    const registered = await loadAndSetup({ enabled: false, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: false, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const handler = registered.tools.get("search_docs")!.handler as Handler;
     const result = (await handler({ query: "webhook" }, RUN_CTX)) as { error?: string };
     expect(result.error).toMatch(/turned off/i);
@@ -202,7 +202,7 @@ describe("registered handlers do real work", () => {
   });
 
   it("reports the four tools in health", async () => {
-    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root });
+    const registered = await loadAndSetup({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
     const health = await registered.plugin.definition.onHealth();
     expect(health.status).toBe("ok");
     expect(health.message).toContain("4 documentation tools");

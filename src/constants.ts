@@ -12,16 +12,18 @@
 export const PLUGIN_ID = "paperclip-docs";
 
 /** Manifest version; keep in sync with package.json. */
-export const PLUGIN_VERSION = "0.2.4";
+export const PLUGIN_VERSION = "0.3.0";
 
 /**
- * Where the corpus lives when the operator has not said otherwise.
+ * An example corpus location, for documentation and the form's placeholder.
  *
- * This is the OKF *artifact* directory produced by the Python build, not the
- * Python tooling itself. `~` is expanded against the worker user's home at
- * config-normalisation time; nothing downstream ever sees a literal `~`.
+ * It is deliberately **not** a default. A default would be one directory shared by
+ * every organization, which is how a multi-tenant instance ends up serving one
+ * organization another's documents: an organization whose configuration nobody had
+ * touched inherited the same root and could read everything in it. The corpus root is
+ * now empty until someone sets it for that organization.
  */
-export const DEFAULT_CORPUS_ROOT = "~/offline-docs/okf-bundles";
+export const EXAMPLE_CORPUS_ROOT = "~/offline-docs/okf-bundles";
 
 /** Tool `limit` when the caller does not pass one. */
 export const DEFAULT_SEARCH_LIMIT = 5;

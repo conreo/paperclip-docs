@@ -258,7 +258,7 @@ describe("the provider degrades rather than failing", () => {
     const root = writeIndex([{ id: "a/one.md", vector: [1, 0] }], { model: "other-model" });
     const config = normalizeConfig({
       enabled: true,
-      corpusRoot: root,
+      corpusRoot: root, allowedBundles: ["alpha", "beta", "gamma"],
       rag: { enabled: true, endpoint: "https://e/v1", model: "configured-model" },
     });
     const provider = semanticProviderFor(ctxWith(async () => ({})), config, root);
@@ -272,7 +272,7 @@ describe("the provider degrades rather than failing", () => {
     const root = writeIndex([{ id: "a/one.md", vector: [1, 0] }]);
     const config = normalizeConfig({
       enabled: true,
-      corpusRoot: root,
+      corpusRoot: root, allowedBundles: ["alpha", "beta", "gamma"],
       rag: { enabled: true, endpoint: "https://e/v1", model: "test-model" },
     });
     const provider = semanticProviderFor(
@@ -296,6 +296,9 @@ describe("the provider degrades rather than failing", () => {
     const config = normalizeConfig({
       enabled: true,
       corpusRoot: root,
+      // The index holds bundle `a`; semantic ranking obeys the grant like everything
+      // else, so an ungranted bundle is filtered out here too.
+      allowedBundles: ["a"],
       rag: { enabled: true, endpoint: "https://e/v1", model: "test-model" },
     });
     const provider = semanticProviderFor(

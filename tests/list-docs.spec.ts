@@ -17,7 +17,7 @@ let config: RuntimeConfig;
 
 beforeEach(async () => {
   fixture = await standardCorpus();
-  config = normalizeConfig({ enabled: true, corpusRoot: fixture.root });
+  config = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
 });
 
 afterEach(async () => {
@@ -121,7 +121,10 @@ describe("list_docs — refusals and misses are results", () => {
   it("names a bundle that does not exist", async () => {
     const outcome = await listDocs(store, config, { bundle: "nope" });
     expect(outcome.error).toBeUndefined();
-    expect(dataOf(outcome)["note"]).toMatch(/no bundle named/i);
+    // Deny by default: an ungranted bundle is refused as ungranted, which is a
+    // stronger answer than "no bundle named that" — it says nothing about whether
+    // the bundle exists at all.
+    expect(outcome.error ?? String(dataOf(outcome)["note"])).toMatch(/not available|not in this instance|no bundle named/i);
   });
 
   it("names a directory that does not exist", async () => {

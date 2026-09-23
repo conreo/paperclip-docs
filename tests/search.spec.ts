@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 /** A hit by concept id, for readable assertions. */
-function find(conceptId: string, query: string, allowedBundles: string[] = []) {
+function find(conceptId: string, query: string, allowedBundles: string[] = ["alpha", "beta", "gamma"]) {
   return searchConcepts(index, query, { limit: 50, allowedBundles }).hits.find(
     (hit) => hit.conceptId === conceptId,
   );
@@ -45,7 +45,7 @@ describe("tokenize", () => {
 
 describe("field weighting", () => {
   it("ranks a title match above a body-only match", () => {
-    const outcome = searchConcepts(index, "zebra", { limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "zebra", { limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     const titleHit = outcome.hits.find((hit) => hit.conceptId === "alpha/zebra-title.md");
     const bodyHit = outcome.hits.find((hit) => hit.conceptId === "beta/zebra-body.md");
 
@@ -64,7 +64,7 @@ describe("field weighting", () => {
 
 describe("AND then OR", () => {
   it("uses ALL when every term matches", () => {
-    const outcome = searchConcepts(index, "webhook retry", { limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "webhook retry", { limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(outcome.mode).toBe("all");
     expect(outcome.hits.map((hit) => hit.conceptId)).toContain("alpha/webhooks.md");
   });
@@ -72,14 +72,14 @@ describe("AND then OR", () => {
   it("falls back to ANY and says so when no document has every term", () => {
     const outcome = searchConcepts(index, "webhook nonexistentterm", {
       limit: 10,
-      allowedBundles: [],
+      allowedBundles: ["alpha", "beta", "gamma"],
     });
     expect(outcome.mode).toBe("any");
     expect(outcome.hits.map((hit) => hit.conceptId)).toContain("alpha/webhooks.md");
   });
 
   it("returns no hits and reports the fallback mode when nothing matches at all", () => {
-    const outcome = searchConcepts(index, "qwertyuiop", { limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "qwertyuiop", { limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     // The ANY fallback *was* attempted, so that is the mode reported: the result
     // says "we searched loosely and found nothing", not "an exact search found
     // nothing", which would be a different and more confident claim.
@@ -90,7 +90,7 @@ describe("AND then OR", () => {
 
 describe("filters and limits", () => {
   it("honours the bundle filter", () => {
-    const outcome = searchConcepts(index, "install", { bundle: "beta", limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "install", { bundle: "beta", limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(outcome.hits.filter((hit) => hit.bundle !== "beta")).toEqual([]);
   });
 
@@ -101,13 +101,13 @@ describe("filters and limits", () => {
   });
 
   it("honours the type filter case-insensitively", () => {
-    const outcome = searchConcepts(index, "alpha", { type: "guide", limit: 50, allowedBundles: [] });
+    const outcome = searchConcepts(index, "alpha", { type: "guide", limit: 50, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(outcome.hits.length).toBeGreaterThan(0);
     expect(outcome.hits.every((hit) => hit.type === "Guide")).toBe(true);
   });
 
   it("respects the limit and reports that more exist", () => {
-    const outcome = searchConcepts(index, "alpha", { limit: 1, allowedBundles: [] });
+    const outcome = searchConcepts(index, "alpha", { limit: 1, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(outcome.hits).toHaveLength(1);
     expect(outcome.more).toBe(true);
   });
@@ -115,7 +115,7 @@ describe("filters and limits", () => {
 
 describe("snippets", () => {
   it("bounds every snippet", () => {
-    const outcome = searchConcepts(index, "alpha", { limit: 50, allowedBundles: [] });
+    const outcome = searchConcepts(index, "alpha", { limit: 50, allowedBundles: ["alpha", "beta", "gamma"] });
     for (const hit of outcome.hits) {
       expect(hit.snippet.length).toBeLessThanOrEqual(SNIPPET_CHARS);
     }
@@ -130,12 +130,12 @@ describe("snippets", () => {
 
 describe("malformed concepts never fail the search", () => {
   it("still indexes a document whose frontmatter did not parse", () => {
-    const outcome = searchConcepts(index, "broken frontmatter", { limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "broken frontmatter", { limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     expect(outcome.hits.map((hit) => hit.conceptId)).toContain("alpha/broken.md");
   });
 
   it("indexes a document with no frontmatter by its first heading", () => {
-    const outcome = searchConcepts(index, "bare page", { limit: 10, allowedBundles: [] });
+    const outcome = searchConcepts(index, "bare page", { limit: 10, allowedBundles: ["alpha", "beta", "gamma"] });
     const hit = outcome.hits.find((entry) => entry.conceptId === "alpha/no-frontmatter.md");
     expect(hit).toBeDefined();
     expect(hit!.title).toBe("Bare page");

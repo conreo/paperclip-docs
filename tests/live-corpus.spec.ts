@@ -41,7 +41,13 @@ function dataOf(outcome: ToolOutcome): Record<string, unknown> {
 
 describe.skipIf(!present)("the installed corpus, end to end", () => {
   beforeAll(() => {
-    config = normalizeConfig({ enabled: true, corpusRoot: CORPUS_ROOT });
+    // Deny by default: the grant is explicit, and read from the corpus rather than
+  // hardcoded, so this keeps working against any build.
+  const bundles = fs
+    .readdirSync(CORPUS_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  config = normalizeConfig({ enabled: true, corpusRoot: CORPUS_ROOT, allowedBundles: bundles });
   });
 
   it("indexes every bundle on disk and reports a plausible size", async () => {

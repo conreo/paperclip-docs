@@ -18,7 +18,7 @@ describe("sources reports the snapshot's age", () => {
 
   beforeEach(async () => {
     fixture = await standardCorpus();
-    config = normalizeConfig({ enabled: true, corpusRoot: fixture.root });
+    config = normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] });
   });
 
   afterEach(async () => {
@@ -126,7 +126,7 @@ describe("sources reports a build manifest when one exists", () => {
       const local = new CorpusStore();
       const outcome = await sources(
         local,
-        normalizeConfig({ enabled: true, corpusRoot: fixture.root }),
+        normalizeConfig({ enabled: true, corpusRoot: fixture.root, allowedBundles: ["alpha", "beta", "gamma"] }),
       );
       const data = outcome.data as {
         manifest: Record<string, unknown> | null;

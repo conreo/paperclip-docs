@@ -80,7 +80,9 @@ Or install it from the Plugin Manager in **Settings → Plugins**. Then open
 
 Two gates, deliberately:
 
-1. **It installs off.** `enabled` defaults to `false`; while off, every call is refused.
+1. **It installs off.** `enabled` defaults to `false`; while off, every call is refused. And then it
+   serves nothing until you name this organization's corpus and tick the bundles it may read —
+   nothing is inferred, and nothing is inherited from another organization.
 2. **Then you grant the tools.** Plugin tools are deny-by-default, so an agent sees them only once
    its tool profile allows them. Until then the plugin is running and answering nothing.
 
@@ -105,8 +107,8 @@ silently-dropped setting is one an operator believes took effect.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enabled` | boolean | `false` | While off, every tool call is refused. |
-| `corpusRoot` | string | `~/offline-docs/okf-bundles` | The bundle directory to serve. `~` expands to the worker user's home. Absolute only. |
-| `allowedBundles` | string[] | `[]` | Which bundles agents may read. Set from the list of bundles in the corpus — untick one to remove it. `[]` means all of them. |
+| `corpusRoot` | string | **empty** | The bundle directory to serve **for this organization**. Empty means none is configured and every tool refuses. `~` expands to the worker user's home. Absolute only. |
+| `allowedBundles` | string[] | `[]` | Which bundles agents may read. **Nothing is granted by default**; tick the bundles this organization may see. |
 | `maxResults` | number | `10` | Hard ceiling on `search_docs` results, whatever an agent asks for. 1–100. |
 | `maxDocChars` | number | `40000` | Character cap for one `read_doc` body. 500–400000. |
 
@@ -161,9 +163,20 @@ No parameters. Returns the corpus root, each visible bundle with its page count,
 
 ## Multiple organizations
 
-Corpora are usually shared — the same public documentation is useful to everyone — so there is
-nothing to bind per organization. What differs is **which bundles** each organization may read, and
-`allowedBundles` is the only content control, which is why it holds on every path:
+**Nothing is shared by default, and no organization can read a corpus it was not given.** Two
+controls, both deny-by-default:
+
+- **`corpusRoot` is per organization and has no default.** An organization whose directory has not
+  been set serves nothing and says so, rather than falling back to a shared path. The first version
+  defaulted to `~/offline-docs/okf-bundles`, which on a multi-tenant instance meant every
+  organization — including ones nobody had configured — read the same corpus. That is a disclosure,
+  which is why the default is now empty.
+- **`allowedBundles` grants nothing until you tick something.** Empty is not "all"; it is "none".
+
+If you *want* several organizations to share one corpus — the same public vendor documentation is
+often useful to everyone — point each at the same `corpusRoot` deliberately and give each its own
+grant. What differs between them is then **which bundles** they may read, and that grant holds on
+every path:
 
 - search results are filtered, so an ungranted bundle is not discoverable;
 - listings are filtered, so it is not browsable;
@@ -173,8 +186,7 @@ nothing to bind per organization. What differs is **which bundles** each organiz
 The settings page lists **the bundles that are actually in the corpus**, each with a switch, because
 the names are discovered rather than invented — asking someone to type them is asking them to
 transcribe. The list is rendered from the corpus, not from the config, so a bundle cannot be
-invisible merely because the config does not name it; that is the failure an allowlist invites, and
-the reason the empty value means *everything* rather than *nothing*.
+invisible merely because the config does not mention it — it simply shows as not granted.
 
 A bundle that appears in the config but not in the corpus is listed as having no effect, rather than
 quietly ignored.
