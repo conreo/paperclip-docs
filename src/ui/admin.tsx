@@ -1,0 +1,551 @@
+/**
+ * Docs' settings, following the structure of Paperclip's own General settings
+ * page — and of the reference CodeGraph plugin's page, so the two feel like the
+ * same product.
+ *
+ * The shape is taken from `ui/src/pages/InstanceGeneralSettings.tsx` rather than
+ * invented, because a plugin page that invents its own layout reads as unfinished
+ * next to the app around it:
+ *
+ *   - a `max-w-4xl` column of spaced sections, one idea each;
+ *   - a section is a `text-sm font-semibold` heading and a short muted sentence
+ *     saying what it does;
+ *   - a setting is saved **immediately** — no Save button anywhere, for either a
+ *     switch or a text field, because General settings has none and a form that
+ *     needs saving is one that can be abandoned half-changed;
+ *   - a failure is one destructive-tinted banner, not a scattered message.
+ *
+ * ## Why the status section comes first
+ *
+ * This plugin's most likely failure is not a crash, it is an operator who
+ * installed it and cannot tell whether the corpus was found. So the page leads
+ * with the four facts that answer that — is it on, where is the corpus, how much
+ * is in it, and how old is it — before it shows a single control.
+ */
+
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  usePluginData,
+  usePluginToast,
+  type PluginSettingsPageProps,
+  type PluginToastTone,
+} from "@paperclipai/plugin-sdk/ui";
+
+import { CORPUS_AGE_WARNING_DAYS, PLUGIN_ID } from "../constants.js";
+import { operatorConfigForSave, readOperatorConfig, type OperatorConfig } from "../config.js";
+import { sanitizeErrorMessage } from "../errors.js";
+import { DATA_KEYS } from "../plugin-keys.js";
+import { StatusLine, styles, thumbTransform } from "./chrome.js";
+
+/** The worker's status payload; keep in step with `StatusPayload` in handlers.ts. */
+interface CorpusStatus {
+  root: string;
+  exists: boolean;
+  enabled: boolean;
+  totalConcepts: number;
+  bundleCount: number;
+  bundles: Array<{ name: string; conceptCount: number; newestTimestamp: string | null }>;
+  oldestTimestamp: string | null;
+  newestTimestamp: string | null;
+  ageDays: number | null;
+  stale: boolean;
+  allowedBundles: string[];
+  error: string | null;
+  configError?: string | null;
+}
+
+type Tone = PluginToastTone;
+type Notify = (text: string, tone: Tone) => void;
+
+/** One credentialed call to the host's own API, as the signed-in board member. */
+async function coreApi<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+  const response = await fetch(path, {
+    method: init?.method ?? "GET",
+    credentials: "include",
+    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    body: init?.body ? JSON.stringify(init.body) : undefined,
+  });
+  const text = await response.text();
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text;
+  }
+  if (!response.ok) {
+    const message =
+      parsed && typeof parsed === "object" && "error" in parsed
+        ? String((parsed as Record<string, unknown>)["error"])
+        : `${response.status} ${response.statusText}`;
+    throw new Error(message);
+  }
+  return parsed as T;
+}
+
+export function SettingsPage({ context }: PluginSettingsPageProps) {
+  const companyId = context.companyId;
+  const toast = usePluginToast();
+
+  const {
+    data: status,
+    loading,
+    error,
+    refresh,
+  } = usePluginData<CorpusStatus>(DATA_KEYS.corpusStatus, { companyId });
+
+  const notify: Notify = useCallback(
+    (text, tone) => toast({ title: "Docs", body: text, tone }),
+    [toast],
+  );
+
+  if (!companyId) {
+    return (
+      <div style={styles.page}>
+        <p style={styles.body}>Open this page inside an organization to configure Docs.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.page}>
+      <header style={styles.title}>
+        <h1 style={styles.h1}>Docs</h1>
+        <p style={styles.lead}>
+          Read-only documentation tools for your agents. They search and read a local, offline
+          corpus — this plugin serves it, it does not build it.
+        </p>
+      </header>
+
+      {error ? (
+        <div style={styles.errorBanner}>
+          Could not read the corpus status: {sanitizeErrorMessage(error)}
+        </div>
+      ) : null}
+
+      {status?.configError ? (
+        <div style={styles.errorBanner}>{status.configError}</div>
+      ) : null}
+
+      {status?.stale ? (
+        <div style={styles.bannerWarning}>
+          <strong>This corpus is {status.ageDays} days old.</strong>
+          <p style={styles.bannerBody}>
+            The newest document was captured {status.newestTimestamp ?? "unknown"}. Answers drawn
+            from it may describe an older version of the software. Rebuild the corpus, then reopen
+            this page to clear the warning.
+          </p>
+        </div>
+      ) : null}
+
+      <Section title="Status" description="What documentation this organization has right now.">
+        {loading && !status ? (
+          <p style={styles.muted}>Checking…</p>
+        ) : (
+          <>
+            <ul style={styles.list}>
+              <StatusLine
+                ok={status?.enabled === true}
+                good="Documentation tools are on for this organization"
+                bad="Documentation tools are off — switch them on below"
+              />
+              <StatusLine
+                ok={status?.exists === true}
+                good={`Corpus found at ${status?.root ?? ""}`}
+                bad={status?.error ?? "No corpus was found at the configured directory"}
+              />
+              <StatusLine
+                ok={(status?.totalConcepts ?? 0) > 0}
+                good={`${status?.totalConcepts ?? 0} concepts across ${status?.bundleCount ?? 0} bundle(s)`}
+                bad="The corpus directory exists but contains no readable concepts"
+              />
+              <StatusLine
+                ok={status?.ageDays !== null && status?.stale === false}
+                good={`Newest capture ${status?.newestTimestamp ?? "unknown"} (${status?.ageDays ?? "?"} days old)`}
+                bad={
+                  status?.ageDays === null || status?.ageDays === undefined
+                    ? "No capture timestamps were found in the corpus"
+                    : `The newest capture is ${status.ageDays} days old — older than ${CORPUS_AGE_WARNING_DAYS} days, so these docs may be out of date`
+                }
+              />
+            </ul>
+            {status && status.bundles.length > 0 ? (
+              <div style={styles.bundleGrid}>
+                {status.bundles.map((bundle) => (
+                  <div key={bundle.name} style={styles.bundleCell}>
+                    <span style={styles.bundleName}>{bundle.name}</span>
+                    <span style={styles.bundleCount}>{bundle.conceptCount}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {status ? (
+              <p style={styles.note}>
+                Oldest capture {status.oldestTimestamp ?? "unknown"} · newest{" "}
+                {status.newestTimestamp ?? "unknown"}.
+                {status.allowedBundles.length > 0
+                  ? ` Agents may read only: ${status.allowedBundles.join(", ")}.`
+                  : " Agents may read every bundle."}
+              </p>
+            ) : null}
+          </>
+        )}
+      </Section>
+
+      <Configuration companyId={companyId} onSaved={refresh} onMessage={notify} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Layout pieces
+// ---------------------------------------------------------------------------
+
+/** A heading, a sentence, and its controls. One idea per section. */
+function Section({
+  title,
+  description,
+  children,
+  control,
+}: {
+  title: string;
+  description: string;
+  children?: ReactNode;
+  control?: ReactNode;
+}) {
+  return (
+    <section style={styles.section}>
+      <div style={control ? styles.sectionSplit : styles.sectionStack}>
+        <div style={styles.sectionText}>
+          <h2 style={styles.h2}>{title}</h2>
+          <p style={styles.body}>{description}</p>
+        </div>
+        {control}
+      </div>
+      {children ? <div style={styles.sectionBody}>{children}</div> : null}
+    </section>
+  );
+}
+
+/**
+ * The switch, matching the host's `ToggleSwitch`.
+ *
+ * Capsule track, oval thumb, and the host's status-green when on — taken from
+ * `ui/src/components/ui/toggle-switch.tsx`, including its deliberate choice of the
+ * status colour over `primary`.
+ */
+function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      // The host's own hook (`data-slot="toggle"`), so anything that styles or
+      // targets its switches by that attribute finds this one too.
+      data-slot="toggle"
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      style={{
+        ...styles.switch,
+        ...(checked ? styles.switchOn : styles.switchOff),
+        ...(disabled ? styles.switchDisabled : null),
+      }}
+    >
+      <span style={{ ...styles.thumb, transform: thumbTransform(checked) }} />
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+function Configuration({
+  companyId,
+  onSaved,
+  onMessage,
+}: {
+  companyId: string;
+  onSaved: () => void;
+  onMessage: Notify;
+}) {
+  const path = `/api/plugins/${PLUGIN_ID}/config?companyId=${encodeURIComponent(companyId)}`;
+  const [stored, setStored] = useState<Record<string, unknown> | null>(null);
+  const [draft, setDraft] = useState<OperatorConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    coreApi<{ configJson?: unknown } | null>(path)
+      .then((response) => {
+        if (cancelled) return;
+        const document =
+          response && typeof response === "object" && "configJson" in response
+            ? (response as { configJson?: unknown }).configJson
+            : response;
+        const record =
+          typeof document === "object" && document !== null && !Array.isArray(document)
+            ? (document as Record<string, unknown>)
+            : {};
+        setStored(record);
+        setDraft(readOperatorConfig(document));
+      })
+      .catch((error) => {
+        if (!cancelled) setFailure(sanitizeErrorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  /** Write one change immediately, the way a General settings switch does. */
+  const write = useCallback(
+    async (edits: Partial<OperatorConfig>, announce?: string) => {
+      if (!draft) return;
+      setBusy(true);
+      try {
+        // Only the schema's own keys are sent: the server validates this payload
+        // with a closed schema, so an extra key is a rejected request rather than
+        // a preserved setting.
+        const { config: configJson, droppedKeys } = operatorConfigForSave(stored, {
+          ...draft,
+          ...edits,
+        });
+        await coreApi(`/api/plugins/${PLUGIN_ID}/config`, {
+          method: "POST",
+          body: { companyId, configJson },
+        });
+        setStored(configJson);
+        setDraft(readOperatorConfig(configJson));
+        onSaved();
+        if (droppedKeys.length > 0) {
+          onMessage(
+            `Saved. This plugin no longer uses ${droppedKeys.join(", ")}, so ${
+              droppedKeys.length === 1 ? "it was" : "they were"
+            } removed.`,
+            "warn",
+          );
+        } else if (announce) {
+          onMessage(announce, "success");
+        }
+      } catch (error) {
+        onMessage(sanitizeErrorMessage(error), "error");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [companyId, draft, onMessage, onSaved, stored],
+  );
+
+  if (failure) {
+    return (
+      <Section title="Configuration" description="Settings for this organization.">
+        <div style={styles.errorBanner}>
+          Could not read the settings: {failure} Nothing was changed.
+        </div>
+      </Section>
+    );
+  }
+
+  if (!draft) {
+    return (
+      <Section title="Configuration" description="Settings for this organization.">
+        <p style={styles.muted}>Loading…</p>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      <Section
+        title="Documentation tools"
+        description="While this is off, every Docs tool call is refused, whatever an agent is otherwise allowed. It is off until you turn it on."
+        control={
+          <Switch
+            checked={draft.enabled}
+            disabled={busy}
+            label="Enable documentation tools for this organization"
+            onChange={(next) =>
+              void write({ enabled: next }, next ? "Documentation tools are on." : "Documentation tools are off.")
+            }
+          />
+        }
+      />
+
+      <Section
+        title="Corpus directory"
+        description="The OKF bundle directory to serve. `~` expands to the worker user's home. The plugin reads this directory; it never writes to it."
+      >
+        <Field
+          value={draft.corpusRoot}
+          disabled={busy}
+          placeholder="~/offline-docs/okf-bundles"
+          label="Corpus directory"
+          onCommit={(value) => void write({ corpusRoot: value }, "Corpus directory updated.")}
+        />
+      </Section>
+
+      <Section
+        title="Bundles agents may read"
+        description="An allowlist, one bundle name per line. Leave it empty to serve every bundle in the corpus."
+      >
+        <Field
+          value={draft.allowedBundles.join("\n")}
+          disabled={busy}
+          placeholder={"n8n\ngrafana"}
+          label="Bundles agents may read"
+          multiline
+          onCommit={(value) =>
+            void write(
+              {
+                allowedBundles: value
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter((line) => line.length > 0),
+              },
+              "Bundle allowlist updated.",
+            )
+          }
+        />
+      </Section>
+
+      <Section
+        title="Maximum search results"
+        description="The hard ceiling on search results, whatever an agent asks for. Between 1 and 100."
+      >
+        <Field
+          value={String(draft.maxResults)}
+          disabled={busy}
+          placeholder="10"
+          label="Maximum search results"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100) {
+              onMessage("Maximum search results must be a whole number between 1 and 100.", "error");
+              return;
+            }
+            void write({ maxResults: parsed }, "Maximum search results updated.");
+          }}
+        />
+      </Section>
+
+      <Section
+        title="Maximum document characters"
+        description="How much of one document read_doc may return before it truncates and marks the cut. Between 500 and 400000. A very large value can push other context out of an agent's window."
+      >
+        <Field
+          value={String(draft.maxDocChars)}
+          disabled={busy}
+          placeholder="40000"
+          label="Maximum document characters"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 500 || parsed > 400_000) {
+              onMessage("Maximum document characters must be between 500 and 400000.", "error");
+              return;
+            }
+            void write({ maxDocChars: parsed }, "Maximum document characters updated.");
+          }}
+        />
+      </Section>
+    </>
+  );
+}
+
+/**
+ * A text field that writes immediately.
+ *
+ * There is no Save button on purpose. A field that needs saving is a field that
+ * can be left half-edited, and it makes the page inconsistent with its own
+ * switches. The commit points are blur and Enter, which is when the operator has
+ * finished with the value: committing on every keystroke would write a corpus
+ * path one character at a time.
+ */
+function Field({
+  value,
+  onCommit,
+  disabled,
+  placeholder,
+  label,
+  multiline,
+  numeric,
+}: {
+  value: string;
+  onCommit: (next: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+  label: string;
+  multiline?: boolean;
+  numeric?: boolean;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+
+  const commit = useCallback(() => {
+    // An empty value is treated as "no change" rather than a save: every one of
+    // these fields is required, so committing an empty string would only produce
+    // a server error where the operator meant to clear a typo.
+    if (text.trim().length === 0 || text === value) {
+      setText(value);
+      return;
+    }
+    onCommit(text.trim());
+  }, [onCommit, text, value]);
+
+  const shared: CSSProperties = multiline
+    ? { ...styles.textarea }
+    : { ...styles.input };
+
+  return (
+    <div style={styles.field}>
+      {multiline ? (
+        <textarea
+          aria-label={label}
+          value={text}
+          rows={4}
+          disabled={disabled}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(event) => setText(event.target.value)}
+          onBlur={commit}
+          style={shared}
+        />
+      ) : (
+        <input
+          aria-label={label}
+          value={text}
+          type={numeric ? "number" : "text"}
+          disabled={disabled}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(event) => setText(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            }
+          }}
+          style={shared}
+        />
+      )}
+      <p style={styles.fieldHint}>
+        {multiline ? "Saves when you click away. " : "Saves when you click away or press Enter. "}
+        This page has no Save button.
+      </p>
+    </div>
+  );
+}

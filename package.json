@@ -1,0 +1,63 @@
+{
+  "name": "paperclip-docs",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Serve a local offline OKF documentation corpus to Paperclip agents as governed, read-only agent tools.",
+  "scripts": {
+    "build": "node ./esbuild.config.mjs",
+    "dev": "node ./esbuild.config.mjs --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ./vitest.config.ts",
+    "test:watch": "vitest --config ./vitest.config.ts",
+    "verify": "npm run typecheck && npm run build && npm test"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
+  },
+  "keywords": [
+    "paperclip",
+    "paperclip-plugin",
+    "paperclipai",
+    "offline-docs",
+    "okf",
+    "open-knowledge-format",
+    "documentation",
+    "knowledge-base",
+    "rag",
+    "ai-agents"
+  ],
+  "author": "conreo",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@paperclipai/plugin-sdk": ">=2026.817.0",
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@paperclipai/plugin-sdk": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@paperclipai/plugin-sdk": "^2026.817.0",
+    "@types/node": "^24.6.0",
+    "@types/react": "^19.0.8",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

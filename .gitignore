@@ -1,0 +1,24 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local npm cache, kept out of the developer's read-only home and out of git.
+.npm-cache/
+
+# Generated corpus fixtures. The tests build small corpora in the OS temp
+# directory, but a developer may also drop scratch corpora here.
+/tests/fixtures/generated/
+/scratch-corpus*/
+.tmp/
+
+# Secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+*.swp
+.vscode/
+.idea/
