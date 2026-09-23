@@ -164,6 +164,24 @@ export async function readDoc(
     return { error: 'Parameter "concept_id" is required and must be a non-empty string' };
   }
 
+  // The allowlist is checked *here*, on the read path, and not only where a bundle
+  // is discovered. `search_docs` and `list_docs` filter their output, which is what
+  // makes a bundle undiscoverable — but a caller who has seen the id can name it, so
+  // filtering on discovery alone is a boundary an agent steps around with one guess.
+  // For a single-tenant install that is an inconsistency; for a multi-tenant one it
+  // is a cross-tenant read, and `allowedBundles` is the only content control this
+  // plugin has. Checked before the file is read rather than after, so an ungranted
+  // document is never opened.
+  const requestedBundle = conceptId.split(/[\\/]+/).filter((part) => part.length > 0)[0] ?? "";
+  if (config.allowedBundles.length > 0 && !config.allowedBundles.includes(requestedBundle)) {
+    return {
+      error:
+        `The bundle "${requestedBundle}" is not available on this instance. ` +
+        `Available bundles: ${config.allowedBundles.join(", ")}.`,
+      data: { concept_id: conceptId, found: false, reason: "bundle_not_allowed" },
+    };
+  }
+
   const read = await readConcept(config.corpusRoot, conceptId, {
     maxChars: config.maxDocChars,
   });
@@ -365,9 +383,21 @@ export async function sources(
     };
   }
 
-  lines.push(`Bundles: ${status.bundles.length} · concepts: ${status.totalConcepts}`);
+  // The agent-facing inventory respects the allowlist; the *settings page* does not,
+  // and that difference is deliberate. An operator configuring `allowedBundles` has
+  // to see every bundle in order to decide what to grant, so `statusPayload` reports
+  // the whole corpus. An agent does not: telling it that `beta` holds 3 concepts and
+  // then refusing to read them is a boundary that announces itself and then refuses,
+  // which reads as a fault rather than as policy.
+  const visible =
+    config.allowedBundles.length === 0
+      ? status.bundles
+      : status.bundles.filter((bundle) => config.allowedBundles.includes(bundle.name));
+  const visibleConcepts = visible.reduce((total, bundle) => total + bundle.conceptCount, 0);
+
+  lines.push(`Bundles: ${visible.length} · concepts: ${visibleConcepts}`);
   lines.push("");
-  for (const bundle of status.bundles) {
+  for (const bundle of visible) {
     const newest = bundle.newestTimestamp ? ` · newest ${bundle.newestTimestamp}` : "";
     lines.push(`  ${bundle.name}: ${bundle.conceptCount} concepts${newest}`);
   }
@@ -397,8 +427,9 @@ export async function sources(
     data: {
       available: true,
       corpusRoot: status.root,
-      bundles: status.bundles,
-      totalConcepts: status.totalConcepts,
+      bundles: visible,
+      totalConcepts: visibleConcepts,
+      allowedBundles: config.allowedBundles,
       oldestTimestamp: status.oldestTimestamp,
       newestTimestamp: status.newestTimestamp,
       ageDays: status.ageDays,
