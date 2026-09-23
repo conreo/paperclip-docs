@@ -25,7 +25,7 @@ const manifest: PaperclipPluginManifestV1 = {
   version: PLUGIN_VERSION,
   displayName: "Docs",
   description:
-    "Serve a locally-installed offline documentation corpus (OKF bundles) to Paperclip agents as governed, read-only tools: search, read, browse, and report the snapshot's age. Every call flows through Paperclip's tool gateway and audit log.",
+    "Serve an Open Knowledge Format (OKF) corpus to Paperclip agents as governed, read-only tools: search, read, browse, and report the snapshot's age. Each organization keeps a registry of the documentation it wants built and at which version; the plugin asks a runner on your host to build it. Keyword search is the baseline, with ranking by meaning as an option. Every call flows through Paperclip's tool gateway and audit log.",
   author: "conreo",
   categories: ["connector", "ui"],
   capabilities: [

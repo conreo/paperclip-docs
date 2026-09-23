@@ -1,8 +1,8 @@
 {
   "name": "paperclip-docs",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
-  "description": "Serve a local offline documentation corpus to Paperclip agents as governed, read-only tools: search, read, browse, and report the snapshot's age.",
+  "description": "Serve an Open Knowledge Format (OKF) corpus to Paperclip agents as governed, read-only tools \u2014 search, read, browse, and report the snapshot's age \u2014 with a per-organization source registry, host-side rebuild requests, and optional semantic retrieval.",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "dev": "node ./esbuild.config.mjs --watch",

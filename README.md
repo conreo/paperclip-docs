@@ -10,6 +10,16 @@ locally installed documentation corpus and exposes it through four agent tools. 
 through Paperclip's own tool gateway, so what an agent may read is governed exactly like any other
 plugin tool — and the plugin is read-only: it never writes to your corpus and stores nothing.
 
+Three things sit around those four tools:
+
+- **a registry, per organization** — which products' documentation to build, and at which version,
+  so an organization reads the docs for what it actually runs;
+- **rebuild requests** — the plugin cannot fetch anything (the runtime gives it no way to spawn a
+  process), so it asks [a runner on your host](https://github.com/conreo/paperclip-docs-builder) to
+  build, and reports what that runner did;
+- **optional semantic retrieval** — off by default. Keyword search is the baseline; with an embedding
+  endpoint configured, search also ranks by meaning.
+
 ```
 paperclip-docs:search_docs   ranked full-text search across the corpus
 paperclip-docs:read_doc      one page in full, capped and truncation-marked

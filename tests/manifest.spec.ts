@@ -30,7 +30,7 @@ describe("manifest", () => {
     // Kept as a literal on purpose: it forces a version bump to be a deliberate edit
     // here as well as in package.json, and the two drifting apart is exactly what
     // this catches.
-    expect(manifest.version).toBe("0.3.0");
+    expect(manifest.version).toBe("0.3.1");
     expect(manifest.version).toBe(
       JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version,
     );
@@ -143,5 +143,26 @@ describe("manifest", () => {
       "refresh",
       "sources",
     ]);
+  });
+});
+
+describe("the descriptions a user reads", () => {
+  it("mention what the plugin does beyond the four tools", () => {
+    // The About tab and the plugin list show this text, and it said only "four governed
+    // tools" for three releases while the plugin grew a registry, rebuild requests and
+    // optional semantic retrieval. A description that omits half the surface is how an
+    // operator concludes the plugin does nothing else.
+    for (const needle of ["OKF", "registry", "runner", "keyword"]) {
+      expect(manifest.description.toLowerCase()).toContain(needle.toLowerCase());
+    }
+  });
+
+  it("stays in step with package.json, which npm shows", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(typeof pkg.description).toBe("string");
+    // Not identical — one is a sentence for a plugin list, the other for a registry page —
+    // but both must name the same product.
+    expect(pkg.description.toLowerCase()).toContain("okf");
+    expect(pkg.description.toLowerCase()).toContain("registry");
   });
 });
