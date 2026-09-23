@@ -22,3 +22,6 @@ dist/
 *.swp
 .vscode/
 .idea/
+
+# Local npm log output from redirected-log installs.
+.npm-logs/
