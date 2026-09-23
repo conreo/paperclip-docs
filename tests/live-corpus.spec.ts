@@ -50,7 +50,13 @@ describe.skipIf(!present)("the installed corpus, end to end", () => {
     // Bounds, not exact counts: the corpus is refreshed, and a test that has to be
     // edited on every refresh stops being run.
     expect(index.bundles.length).toBeGreaterThanOrEqual(10);
-    expect(index.concepts.length).toBeGreaterThan(5_000);
+    // A floor, not a snapshot. It used to be 5,000 because that was one build of
+    // one corpus; the builder now excludes changelogs, contributor guides and
+    // translations on purpose, so the same sources legitimately produce fewer
+    // concepts. What is worth asserting is that this is a real corpus and not a
+    // fixture — the fixture corpora in this repo are tens of pages, so an order of
+    // magnitude above them is the property that matters.
+    expect(index.concepts.length).toBeGreaterThan(1_000);
     // Every concept knows which bundle it came from, or `bundle` filtering is a
     // lie for the ones that do not. The corpus has exactly one exception: its own
     // master `index.md` at the root, which is navigation rather than documentation
