@@ -2,7 +2,7 @@
   "name": "paperclip-docs",
   "version": "0.1.0",
   "type": "module",
-  "description": "Serve a local offline OKF documentation corpus to Paperclip agents as governed, read-only agent tools.",
+  "description": "Serve a local offline documentation corpus to Paperclip agents as governed, read-only tools: search, read, browse, and report the snapshot's age.",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "dev": "node ./esbuild.config.mjs --watch",
@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config ./vitest.config.ts",
     "test:watch": "vitest --config ./vitest.config.ts",
-    "verify": "npm run typecheck && npm run build && npm test"
+    "verify": "npm run typecheck && npm run build && npm test",
+    "prepack": "npm run clean && node ./esbuild.config.mjs --no-sourcemap",
+    "prepublishOnly": "npm run verify"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
@@ -21,19 +23,27 @@
     "paperclip",
     "paperclip-plugin",
     "paperclipai",
+    "documentation",
+    "docs",
     "offline-docs",
     "okf",
     "open-knowledge-format",
-    "documentation",
     "knowledge-base",
-    "rag",
+    "docs-search",
     "ai-agents"
   ],
   "author": "conreo",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/conreo/paperclip-docs.git"
+  },
+  "homepage": "https://github.com/conreo/paperclip-docs#readme",
+  "bugs": {
+    "url": "https://github.com/conreo/paperclip-docs/issues"
+  },
   "files": [
     "dist",
-    "docs",
     "README.md",
     "LICENSE"
   ],

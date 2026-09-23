@@ -1,91 +1,105 @@
 # paperclip-docs
 
-Offline documentation for Paperclip agents, served as governed, read-only tools.
+**Your agents stop guessing about the stack.** Give Paperclip a local copy of the
+documentation for the tools and libraries it works with, and agents can search and read it
+through governed tools instead of recalling it from training data, fetching it from the web,
+or inventing it.
 
 `paperclip-docs` is a [Paperclip](https://github.com/paperclipai/paperclip) plugin. It indexes a
-locally-installed **OKF** (Open Knowledge Format) documentation corpus and exposes it through four
-agent tools. Every call flows through Paperclip's own tool gateway, so what an agent may read is
-governed the same way as any other plugin tool.
+locally installed documentation corpus and exposes it through four agent tools. Every call flows
+through Paperclip's own tool gateway, so what an agent may read is governed exactly like any other
+plugin tool — and the plugin is read-only: it never writes to your corpus and stores nothing.
 
 ```
 paperclip-docs:search_docs   ranked full-text search across the corpus
-paperclip-docs:read_doc      one concept in full, capped and truncation-marked
+paperclip-docs:read_doc      one page in full, capped and truncation-marked
 paperclip-docs:list_docs     progressive disclosure over the directory tree
 paperclip-docs:sources       what is installed, and how old it is
 ```
 
-Tools are namespaced by the host; agents see them as `paperclip-docs:<name>`.
-
 ---
 
-## A serving plugin, not a building one
+## What you need first: a corpus
 
-The corpus is built **out of band, in Python**. Scraping vendor documentation, cleaning HTML to
-markdown, and converting it to OKF bundles is a batch job with its own dependencies, its own
-failure modes, and a runtime measured in hours. None of that belongs in a worker process, and an
-agent must not be able to trigger a re-scrape by calling a tool.
+**This plugin serves a corpus; it does not build one.** There is no scraper and no ingest step
+here, and that is deliberate — fetching vendor documentation is a batch job with its own
+dependencies and hours-long runtime, and an agent must never be able to trigger a re-scrape by
+calling a tool.
 
-So the split is deliberate:
-
-| | |
-|---|---|
-| **Build** (Python, elsewhere) | fetch → clean → convert → `okf-bundles/` |
-| **Serve** (this plugin) | index `okf-bundles/` lazily, answer questions about it |
-
-This plugin never writes to the corpus. The directory is an input. Its entire job is to answer
-accurately — including accurately saying *how old the snapshot is*, which is what `sources` exists
-for. An agent that answers from a two-year-old snapshot without saying so is worse than one that
-answers "the docs I have are from 2024".
-
-## The corpus format
+A corpus is just a directory of markdown files with YAML frontmatter:
 
 ```
-okf-bundles/
-├── index.md                 # optional root index
-├── n8n/
-│   ├── index.md             # progressive disclosure, one per directory
-│   └── integrations/…/foo.md
-└── grafana/…
+docs-corpus/
+├── index.md                  # optional root index
+├── postgresql/
+│   ├── index.md              # optional per-directory index
+│   ├── backup.md
+│   └── replication.md
+└── traefik/
+    └── routing.md
 ```
 
-Every concept is a markdown file with YAML frontmatter:
+Each page is markdown with a frontmatter block:
 
 ```markdown
 ---
-
 type: Guide
-title: "Transfer Ownership"
-description: "- Files & synchronization"
-resource: https://docs.nextcloud.com/…
-tags: [nextcloud]
+title: "Point-in-time recovery"
+description: "Restoring to a chosen recovery target"
+resource: https://www.postgresql.org/docs/current/continuous-archiving.html
+tags: [postgresql, backup]
 timestamp: 2026-07-03T02:22:34Z
-okf_version: "0.1"
-
 ---
 
-<body>
+WAL archiving lets you restore to any point in time…
 ```
 
-Top-level directories are **bundles**. The plugin tolerates what the real corpus actually contains:
-a leading blank line before the frontmatter, `CRLF` endings, `index.md` files with no fields but
-`okf_version`, files with no frontmatter at all, `Untitled` titles, and frontmatter that does not
-parse. A bad concept is skipped or degraded; it never fails a search.
+The top-level directories are **bundles** — the unit you allow or deny per organization. Nothing
+else is required: a directory of hand-written notes works, and it is a perfectly good way to start.
+If you want a large vendor corpus, you build it yourself, out of band, with whatever tooling you
+like; the plugin will index it as long as the shape above holds.
+
+### How old is the corpus?
+
+`timestamp` is what makes answers honest. `sources` reports the oldest and newest capture dates and
+the age in days, and the settings page warns once the newest capture is more than 90 days old — so
+an agent can say *"the docs I have are from July"* instead of presenting six-month-old vendor
+documentation as current. **Refresh is your job**: replacing the directory is the entire update
+mechanism, and the plugin picks it up on the next call.
 
 ## Install
 
 ```bash
-npm install
-npm run build          # dist/worker.js, dist/manifest.js, dist/ui/
+paperclipai plugin install paperclip-docs
 ```
 
-Install the package into Paperclip as a local-path plugin, then open
-**Settings → Plugins → Docs** and switch it on. It is **off by default**: installing a plugin must
-not, by itself, put a corpus in front of an agent.
+Or install it from the Plugin Manager in **Settings → Plugins**. Then open
+**Settings → Plugins → Docs**.
+
+### Installing does not put anything in front of an agent
+
+Two gates, deliberately:
+
+1. **It installs off.** `enabled` defaults to `false`; while off, every call is refused.
+2. **Then you grant the tools.** Plugin tools are deny-by-default, so an agent sees them only once
+   its tool profile allows them. Until then the plugin is running and answering nothing.
+
+**No MCP client is needed.** Unlike a code-intelligence plugin, these tools are delivered through
+Paperclip's tool gateway — you do not add anything to an agent's adapter, and there is no
+`mcp.json` to write. If an agent cannot see the tools, the answer is a profile grant, never a
+missing MCP config.
+
+### Set the corpus path
+
+`corpusRoot` defaults to `~/offline-docs/okf-bundles`, where `~` is the **worker process's** home
+directory — not yours, and in a container not the host's. If the settings page says the corpus was
+not found, that path is almost always why. Point it at the absolute path inside the environment
+where Paperclip runs.
 
 ## Configuration
 
-All five keys are per-company, closed (`additionalProperties: false`), and observable from the
-settings page. An unknown key is **rejected with its name in the error**, not silently dropped — a
+All five keys are per-company, closed (`additionalProperties: false`), and visible on the settings
+page. An unknown key is **rejected with its name in the error**, never silently dropped — a
 silently-dropped setting is one an operator believes took effect.
 
 | Key | Type | Default | Meaning |
@@ -100,19 +114,22 @@ silently-dropped setting is one an operator believes took effect.
 
 ### `search_docs { query, bundle?, type?, limit? }`
 
-Tokenises the query and scores every concept by **where** each term matches:
+Tokenises the query and scores every page by **where** each term matches:
 
 ```
 title (8) > tags (6) > description (4) > headings (3) > body (1)
 ```
 
 plus a bonus when the whole query appears verbatim in the title. All terms must match (**AND**); if
-nothing matches all of them, the search retries with any term (**OR**) and the result states which
-mode produced it, so an exact answer is distinguishable from a loose one.
+nothing matches all of them, the search retries with any term (**OR**) and states which mode
+produced the result, so an exact answer is distinguishable from a loose one.
 
 Returns, per hit: `bundle`, `concept_id`, `title`, `type`, `heading`, a ~500-character `snippet`,
-`resource`, `timestamp`, and `score`. `limit` defaults to 5 and is clamped to the configured
-`maxResults`.
+`resource`, `timestamp`, and `score`. `limit` defaults to 5 and is clamped to `maxResults`.
+
+Pass `bundle` whenever you know which product you mean. With several unrelated products in one
+corpus, an unfiltered query is the main way to get a plausible answer from the wrong one — and the
+`concept_id` in every hit tells the agent where it came from.
 
 ### `read_doc { concept_id }`
 
@@ -131,62 +148,109 @@ cannot tell it is missing anything.
 ### `list_docs { bundle?, path? }`
 
 Progressive disclosure, one level at a time. If the requested directory has an `index.md`, that is
-returned — the builder wrote it as the level's table of contents. Otherwise the plugin synthesises
-a listing of child directories (with concept counts) and child pages (with descriptions). With no
-arguments it lists the bundles. `path` may be given without `bundle`, in which case its first
-segment is the bundle.
+returned — the natural table of contents for that level. Otherwise the plugin synthesises a listing
+of child directories (with page counts) and child pages (with descriptions). With no arguments it
+lists the bundles. `path` may be given without `bundle`, in which case its first segment is the
+bundle.
 
 ### `sources`
 
-No parameters. Returns the corpus root, each bundle with its concept count, the total, the
+No parameters. Returns the corpus root, each visible bundle with its page count, the total, the
 **oldest and newest `timestamp`** in frontmatter, the age in days, and any build manifest
-(`manifest.json`, `okf-manifest.json`, or `build-manifest.json`) if the builder wrote one.
+(`manifest.json`, `okf-manifest.json`, or `build-manifest.json`) if your builder writes one.
 
-A snapshot must be able to state its own age. Without this, an agent answers from documentation
-that may describe a version nobody runs any more, and the answer reads exactly like a current one.
+## Multiple organizations
 
-## Security notes
+Corpora are usually shared — the same public documentation is useful to everyone — so there is
+nothing to bind per organization. What differs is **which bundles** each organization may read, and
+`allowedBundles` is the only content control, which is why it holds on every path:
+
+- search results are filtered, so an ungranted bundle is not discoverable;
+- listings are filtered, so it is not browsable;
+- **reads are filtered too** — naming a page in an ungranted bundle is refused, because a path that
+  reaches a file is a boundary you cannot enforce by hiding it.
+
+The **settings page deliberately shows every bundle**, including ones this organization has not
+been granted: an operator configuring the allowlist has to see what is available to grant. Agents
+see only what they may read.
+
+Two organizations can also point at different corpora; the plugin keys its index by root, so
+neither can be answered from the other's.
+
+## Security
 
 The corpus is a directory tree on the server, and `read_doc` / `list_docs` accept a path from an
 agent. That makes an unvalidated path a filesystem read primitive dressed up as a documentation
 lookup. Every path passes through one deny-by-default resolver:
 
 - **Absolute paths are refused**, in POSIX, drive-letter, and UNC forms.
-- **`..` segments are refused** before any join, so no normalisation can argue the result is
-  inside the root. A filename that merely contains dots (`v1..2.md`) is fine.
+- **`..` segments are refused** before any join, so no normalisation can argue the result is inside
+  the root. A filename that merely contains dots (`v1..2.md`) is fine.
 - **Symlinks are resolved and the *real* path is re-checked** — including a symlink in an ancestor
   directory, which is why the nearest existing ancestor is resolved, not only the leaf. A symlink
-  inside the corpus that points outward is refused at read time and skipped during indexing.
+  inside the corpus that points outward is refused at read time and skipped while indexing.
 - A refused path is a **named result, not a throw**: the tool returns a sentence, never a stack
   trace.
 
 Other bounds:
 
-- **Result caps.** `maxResults` bounds search output; `maxDocChars` bounds a document. Both are
-  operator-set and both have schema minimums and maximums, so a typo cannot ask for a 4 GB read.
-- **Bundle allowlist.** `allowedBundles` narrows which top-level bundles are visible; an allowlist
-  entry must be a plain bundle name, not a path (`n8n/../grafana` is rejected).
-- **Lazy, mtime-invalidated index.** The corpus is walked once and cached; the cache is keyed on a
-  cheap mtime signature of the root and bundle directories. A search does not read 80 MB from disk
-  per request, and an edit to a build artifact is not something the plugin pretends to track.
-- **No writes, no state.** The plugin persists nothing and declares no state or local-folder
-  capability. Its only capabilities are `agent.tools.register` and `instance.settings.register`.
+- **Result caps.** `maxResults` bounds search output; `maxDocChars` bounds a document. Both have
+  schema minimums and maximums, so a typo cannot ask for a 4 GB read.
+- **Allowlist entries are plain bundle names**, not paths (`n8n/../grafana` is rejected).
+- **Lazy, mtime-invalidated index.** The corpus is walked once and cached against a cheap mtime
+  signature. A search does not re-read the corpus from disk per request.
+- **No writes, no state, no network.** The plugin persists nothing, fetches nothing, and declares
+  no state, local-folder, or HTTP capability. Its only capabilities are `agent.tools.register` and
+  `instance.settings.register`. Inspect it before trusting it: that is the whole list.
+
+### A note on the documentation itself
+
+The plugin ships **no corpus** — that is partly a licensing decision. Vendor documentation carries
+its own terms, and redistributing a corpus is between you and the vendor. Keeping ingestion out of
+the package keeps that your call.
 
 ## Settings page
 
 **Settings → Plugins → Docs** has two sections:
 
-- **Status** — whether the tools are on, whether the corpus was found and where, the concept and
-  bundle counts, the oldest/newest capture timestamp, and a warning banner when the newest capture
-  is more than 90 days old.
+- **Status** — whether the tools are on, whether the corpus was found and where, page and bundle
+  counts, the oldest/newest capture timestamp, and a warning when the newest capture is more than
+  90 days old.
 - **Configuration** — the switch and the four fields, **saving immediately**. There is no Save
-  button anywhere on the page: a form that needs saving is one that can be abandoned half-changed.
-  Text fields commit on blur or Enter. Failures surface through the host toast, with thrown objects
-  normalised so the page never shows `[object Object]`.
+  button: a form that needs saving is one that can be abandoned half-changed. Text fields commit on
+  blur or Enter, and failures surface through the host toast with thrown objects normalised, so the
+  page never shows `[object Object]`.
+
+## If nothing works
+
+| Symptom | Cause |
+|---|---|
+| Settings page: *corpus not found* | `corpusRoot` resolves inside the **worker's** environment. Check the path there, not on your machine. |
+| Tools never appear for an agent | They are deny-by-default. Grant them in the agent's tool profile — and check the plugin is enabled for that company first. |
+| Search returns nothing useful | Pass `bundle`. With several products in one corpus, an unfiltered query is how you get the wrong product's answer. |
+| `sources` warns the corpus is stale | Nothing is broken; the snapshot is old. Refresh the directory. |
+| A page is missing from results | Pages whose frontmatter does not parse, or with no `type`, are skipped or degraded rather than failing the search. Check the file's frontmatter. |
+
+## How this differs from the bundled LLM Wiki plugin
+
+Both deal with local documentation, in opposite directions, and they compose well:
+
+| | **LLM Wiki** (`@paperclipai/plugin-llm-wiki`) | **paperclip-docs** (this plugin) |
+|---|---|---|
+| Direction | **builds and maintains** a wiki | **serves** a corpus you already have |
+| Writes | writes pages, manages sources, migrations, a DB namespace | read-only, stateless, no migrations |
+| Uses a model | distils sources into wiki pages with an LLM | never — search and read only |
+| Content | generated and continuously edited | whatever you put in the directory, at a version you chose |
+| Tools | search/read/write/patch/source/log/index/backlinks | search/read/list/sources |
+
+If you want Paperclip to *maintain* knowledge from your issues and sources, use LLM Wiki. If you
+want agents to answer from a specific, versioned set of documentation and be able to say how old it
+is, use this.
 
 ## Development
 
 ```bash
+npm install
 npm run typecheck      # tsc --noEmit
 npm run build          # esbuild worker + manifest + ui
 npm test               # vitest
@@ -194,14 +258,18 @@ npm run verify         # typecheck && build && test
 npm run dev            # esbuild --watch
 ```
 
-Tests build their own small fixture corpora in the OS temp directory. They never read a real corpus:
-a test that depended on one machine's build artifact would pass there and fail everywhere else.
+Tests build their own small fixture corpora in the OS temp directory and never read a real one: a
+test that depended on one machine's build artifact would pass there and fail everywhere else. There
+is also a live suite that runs the tools against a real corpus when one is present
+(`PAPERCLIP_DOCS_TEST_CORPUS=/path/to/corpus`), and skips otherwise.
+
+The published package is built without sourcemaps (`npm run prepack`): nothing consumes them at
+runtime and they are most of the bytes.
 
 ## Requirements
 
-- Node.js ≥ 20.
-- `@paperclipai/plugin-sdk` (peer) and React ≥ 18 (peer, for the UI bundle).
-- A corpus produced by an OKF build. This plugin does not create one.
+- Node.js ≥ 20, and a Paperclip instance that provides the plugin SDK.
+- A corpus: a directory of markdown with OKF-style frontmatter. This plugin does not create one.
 
 ## License
 

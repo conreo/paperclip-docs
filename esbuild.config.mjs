@@ -12,9 +12,19 @@ const presets = createPluginBundlerPresets({
 });
 const watch = process.argv.includes("--watch");
 
-const workerCtx = await esbuild.context(presets.esbuild.worker);
-const manifestCtx = await esbuild.context(presets.esbuild.manifest);
-const uiCtx = await esbuild.context(presets.esbuild.ui);
+/**
+ * `--no-sourcemap` is what the published package is built with.
+ *
+ * Nothing consumes maps at plugin runtime, they carry absolute build paths into a
+ * public tarball, and they are most of its bytes — the worker map alone is larger
+ * than the worker. They stay on for local work, where they are the whole point.
+ */
+const published = process.argv.includes("--no-sourcemap");
+const forPublish = (preset) => (published ? { ...preset, sourcemap: false } : preset);
+
+const workerCtx = await esbuild.context(forPublish(presets.esbuild.worker));
+const manifestCtx = await esbuild.context(forPublish(presets.esbuild.manifest));
+const uiCtx = await esbuild.context(forPublish(presets.esbuild.ui));
 
 if (watch) {
   await Promise.all([workerCtx.watch(), manifestCtx.watch(), uiCtx.watch()]);
