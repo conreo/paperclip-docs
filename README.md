@@ -106,7 +106,7 @@ silently-dropped setting is one an operator believes took effect.
 |---|---|---|---|
 | `enabled` | boolean | `false` | While off, every tool call is refused. |
 | `corpusRoot` | string | `~/offline-docs/okf-bundles` | The bundle directory to serve. `~` expands to the worker user's home. Absolute only. |
-| `allowedBundles` | string[] | `[]` | Allowlist of bundle names. `[]` means every bundle. |
+| `allowedBundles` | string[] | `[]` | Which bundles agents may read. Set from the list of bundles in the corpus — untick one to remove it. `[]` means all of them. |
 | `maxResults` | number | `10` | Hard ceiling on `search_docs` results, whatever an agent asks for. 1–100. |
 | `maxDocChars` | number | `40000` | Character cap for one `read_doc` body. 500–400000. |
 
@@ -170,9 +170,14 @@ nothing to bind per organization. What differs is **which bundles** each organiz
 - **reads are filtered too** — naming a page in an ungranted bundle is refused, because a path that
   reaches a file is a boundary you cannot enforce by hiding it.
 
-The **settings page deliberately shows every bundle**, including ones this organization has not
-been granted: an operator configuring the allowlist has to see what is available to grant. Agents
-see only what they may read.
+The settings page lists **the bundles that are actually in the corpus**, each with a switch, because
+the names are discovered rather than invented — asking someone to type them is asking them to
+transcribe. The list is rendered from the corpus, not from the config, so a bundle cannot be
+invisible merely because the config does not name it; that is the failure an allowlist invites, and
+the reason the empty value means *everything* rather than *nothing*.
+
+A bundle that appears in the config but not in the corpus is listed as having no effect, rather than
+quietly ignored.
 
 Two organizations can also point at different corpora; the plugin keys its index by root, so
 neither can be answered from the other's.

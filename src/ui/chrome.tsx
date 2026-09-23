@@ -251,6 +251,11 @@ export const styles: Record<string, CSSProperties> = {
     resize: "vertical",
   },
   fieldHint: { fontSize: 12.5, color: ui.mutedForeground, lineHeight: 1.4, margin: 0 },
+  // One row per bundle the corpus actually contains. A list rather than a text box:
+  // the names are discovered, not invented, so asking someone to type them was
+  // asking them to transcribe.
+  bundleList: { listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 8 },
+  bundleRow: { display: "flex", alignItems: "center", gap: 8 },
   // Tuning lives behind one disclosure so the page opens on the two things an
   // operator comes for: is it working, and who may read it.
   disclosure: { marginTop: 4 },

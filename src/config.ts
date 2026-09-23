@@ -68,7 +68,7 @@ export const INSTANCE_CONFIG_SCHEMA: Record<string, unknown> = {
       items: { type: "string" },
       title: "Bundles agents may read",
       description:
-        "Which parts of the corpus this organization may read; empty means all of it. Enforced on search, browsing and reading alike, so naming a page in a bundle that is not listed is refused rather than merely hidden. It does not decide which agents may call these tools — that is the tool grants on each agent.",
+        "Which parts of the corpus this organization may read; empty means all of it. Set from the list of bundles that are actually in the corpus, not typed: unticking one removes it. Enforced on search, browsing and reading alike, so naming a page in a bundle that is not listed is refused rather than merely hidden. It does not decide which agents may call these tools — that is the tool grants on each agent.",
       default: [],
     },
     maxResults: {
@@ -374,6 +374,53 @@ function readOperatorSources(raw: unknown): OperatorSource[] {
     });
   }
   return out;
+}
+
+/**
+ * The allowlist after an operator ticks or unticks one bundle.
+ *
+ * ## Why this is a function and not two lines in the component
+ *
+ * The stored value has a special case — empty means *every* bundle — and that case
+ * is load-bearing: it is what lets a corpus grow without silently hiding new
+ * bundles. Anything that turns a real list back into the empty one by accident
+ * widens access, and anything that fails to turn a complete list back into the empty
+ * one means a newly built bundle arrives invisible to every agent.
+ *
+ * So the rule is written once, here, and tested:
+ *
+ *   - empty means "everything discovered", which is the state the page shows first;
+ *   - ticking or unticking is applied to that effective set;
+ *   - the result is stored as the empty list **only** when it covers every discovered
+ *     bundle and names nothing else. A set that covers everything *and* carries a
+ *     stale name is stored as a list, because canonicalising it would quietly grant
+ *     whatever gets built next.
+ */
+/**
+ * The bundles this organization may read, out of the ones the corpus has.
+ *
+ * The same "empty means everything" rule {@link toggleBundle} stores, applied for
+ * display: the page renders one row per discovered bundle, so nothing can be hidden
+ * by the config not mentioning it.
+ */
+export function effectiveBundles(discovered: string[], allowed: string[]): string[] {
+  return allowed.length > 0 ? allowed : discovered;
+}
+
+export function toggleBundle(
+  discovered: string[],
+  allowed: string[],
+  bundle: string,
+  keep: boolean,
+): string[] {
+  const effective = new Set(allowed.length > 0 ? allowed : discovered);
+  if (keep) effective.add(bundle);
+  else effective.delete(bundle);
+
+  const coversEverything = discovered.every((name) => effective.has(name));
+  const namesSomethingElse = [...effective].some((name) => !discovered.includes(name));
+  if (coversEverything && !namesSomethingElse) return [];
+  return [...effective].sort();
 }
 
 export interface SavePayload {

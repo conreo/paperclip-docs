@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 
 import {
+  effectiveBundles,
+  toggleBundle,
   ConfigError,
   INSTANCE_CONFIG_SCHEMA,
   OPERATOR_CONFIG_DEFAULTS,
@@ -229,5 +231,46 @@ describe("operatorConfigForSave", () => {
   it("ignores an edit for a key outside the schema", () => {
     const { config } = operatorConfigForSave({}, { notAKey: 1 } as never);
     expect(config).toEqual({});
+  });
+});
+
+describe("toggling a bundle in the allowlist", () => {
+  const discovered = ["grafana", "n8n", "restic"];
+
+  it("starts from 'everything' when nothing is configured", () => {
+    expect(toggleBundle(discovered, [], "n8n", false)).toEqual(["grafana", "restic"]);
+  });
+
+  it("stores the empty list again once everything is back on", () => {
+    // The canonical form matters: empty is what lets a corpus grow without the new
+    // bundle arriving invisible to every agent.
+    const withoutN8n = toggleBundle(discovered, [], "n8n", false);
+    expect(toggleBundle(discovered, withoutN8n, "n8n", true)).toEqual([]);
+  });
+
+  it("refuses to canonicalise a set that carries a name the corpus does not have", () => {
+    // It covers every discovered bundle, so a naive "is everything on?" check would
+    // collapse it to empty — which would grant whatever gets built next, including
+    // bundles nobody has seen.
+    const withStale = ["grafana", "n8n", "restic", "retired-product"];
+    expect(toggleBundle(discovered, withStale, "n8n", true)).toEqual(withStale.sort());
+  });
+
+  it("keeps a bundle excluded when it is not in the corpus yet", () => {
+    // Deny by default survives: a bundle that is not named stays out, even while
+    // the operator is toggling something else.
+    const onlyN8n = toggleBundle(discovered, ["n8n"], "restic", false);
+    expect(onlyN8n).toEqual(["n8n"]);
+  });
+
+  it("drops a name that is no longer in the corpus once it is toggled off", () => {
+    expect(toggleBundle(discovered, ["n8n", "gone"], "gone", false)).toEqual(["n8n"]);
+  });
+
+  it("renders every discovered bundle as readable when nothing is configured", () => {
+    // The page lists what the corpus has, so an unmentioned bundle cannot be
+    // invisible — which is the failure an allowlist invites.
+    expect(effectiveBundles(discovered, [])).toEqual(discovered);
+    expect(effectiveBundles(discovered, ["n8n"])).toEqual(["n8n"]);
   });
 });

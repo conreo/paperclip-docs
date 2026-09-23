@@ -33,7 +33,13 @@ import {
 } from "@paperclipai/plugin-sdk/ui";
 
 import { CORPUS_AGE_WARNING_DAYS, PLUGIN_ID } from "../constants.js";
-import { operatorConfigForSave, readOperatorConfig, type OperatorConfig } from "../config.js";
+import {
+  effectiveBundles,
+  operatorConfigForSave,
+  readOperatorConfig,
+  toggleBundle,
+  type OperatorConfig,
+} from "../config.js";
 import { sanitizeErrorMessage } from "../errors.js";
 import { ACTION_KEYS, DATA_KEYS } from "../plugin-keys.js";
 import { StatusLine, styles, thumbTransform } from "./chrome.js";
@@ -296,6 +302,15 @@ function Configuration({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
+  // The bundle list is rendered from what the corpus *has*, and each row's state
+  // comes from the same "empty means everything" rule the stored value uses — so a
+  // bundle cannot be invisible merely because the config does not mention it.
+  const names = availableBundles.map((bundle) => bundle.name);
+  const readable = draft ? effectiveBundles(names, draft.allowedBundles) : names;
+  const staleNames = draft
+    ? draft.allowedBundles.filter((name) => !names.includes(name))
+    : [];
+
   useEffect(() => {
     let cancelled = false;
     coreApi<{ configJson?: unknown } | null>(path)
@@ -423,46 +438,51 @@ function Configuration({
 
       <Section
         title="Bundles agents may read"
-        description="Which parts of this corpus the organization may read. Empty means all of it, which is right when everything in the corpus is documentation you are happy for any agent to cite. Naming bundles does two things: it keeps an organization away from docs it has no business reading, and it stops agents answering from the wrong product's documentation — the more common problem, and the reason to narrow it even when nothing is secret. It does not decide which agents may call these tools; that is the tool grants on each agent."
+        description="Which parts of this corpus this organization may read. These are the bundles that are actually in it — switch one off to keep agents away from it. Narrowing improves answers even when nothing is secret: a corpus of fourteen products answering a question about one is how an agent ends up citing the wrong product's documentation. This does not decide which agents may use these tools; that is the tool grants on each agent."
       >
-        {availableBundles.length > 0 ? (
+        {availableBundles.length === 0 ? (
           <p style={styles.fieldHint}>
-            In this corpus:{" "}
-            {availableBundles
-              .map((bundle) => `${bundle.name} (${bundle.conceptCount})`)
-              .join(" · ")}
+            No bundles are in the corpus yet, so there is nothing to choose. Build a corpus, or point
+            this organization at one that has been built.
           </p>
         ) : (
-          <p style={styles.fieldHint}>
-            No bundles are in the corpus yet, so there is nothing to allow. Point the corpus at a
-            built one first.
-          </p>
+          <>
+            <ul style={styles.bundleList}>
+              {availableBundles.map((bundle) => (
+                <li key={bundle.name} style={styles.bundleRow}>
+                  <Switch
+                    checked={readable.includes(bundle.name)}
+                    disabled={busy}
+                    label={`${bundle.name} — ${bundle.conceptCount} ${
+                      bundle.conceptCount === 1 ? "page" : "pages"
+                    }`}
+                    onChange={(next) =>
+                      void write(
+                        {
+                          allowedBundles: toggleBundle(
+                            names,
+                            draft.allowedBundles,
+                            bundle.name,
+                            next,
+                          ),
+                        },
+                        next
+                          ? `Agents may read ${bundle.name}.`
+                          : `Agents may no longer read ${bundle.name}.`,
+                      )
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
+            {staleNames.length > 0 && (
+              <p style={styles.fieldHint}>
+                Also configured, but not in the corpus: {staleNames.join(", ")}. Nothing matches them,
+                so they have no effect.
+              </p>
+            )}
+          </>
         )}
-        <Field
-          value={draft.allowedBundles.join("\n")}
-          disabled={busy}
-          placeholder={
-            availableBundles.length > 0
-              ? availableBundles
-                  .slice(0, 2)
-                  .map((bundle) => bundle.name)
-                  .join("\n")
-              : "one bundle name per line"
-          }
-          label="Bundles agents may read"
-          multiline
-          onCommit={(value) =>
-            void write(
-              {
-                allowedBundles: value
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter((line) => line.length > 0),
-              },
-              "Bundle allowlist updated.",
-            )
-          }
-        />
       </Section>
 
       <details style={styles.disclosure}>
