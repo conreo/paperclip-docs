@@ -97,7 +97,7 @@ export const DOC_TOOL_SPECS: readonly DocToolSpec[] = [
     name: "sources",
     displayName: "Documentation Sources",
     description:
-      "Report what documentation is installed and how old it is: the corpus root, every bundle with its concept count, the total number of concepts, and the oldest and newest capture timestamps in the corpus. Call this before answering a question whose correctness depends on the docs being current, so the answer can be qualified with the snapshot's age instead of implying the documentation is up to date. Requires no arguments.",
+      "Report what documentation is installed and how old it is: every bundle with its concept count, the total number of concepts, and the oldest and newest capture timestamps in the corpus. Call this before answering a question whose correctness depends on the docs being current, so the answer can be qualified with the snapshot's age instead of implying the documentation is up to date. Requires no arguments.",
     params: {},
     required: [],
   },

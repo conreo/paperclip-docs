@@ -130,10 +130,17 @@ describe("sources reports a build manifest when one exists", () => {
       );
       const data = outcome.data as {
         manifest: Record<string, unknown> | null;
-        manifestPath: string | null;
+        manifestPath?: string | null;
+        corpusRoot?: string;
       };
-      expect(data.manifestPath).toBe("manifest.json");
+      // The contents are provenance an agent can legitimately use; the *path* names a
+      // directory on the host, and that directory holds the index and the runner's
+      // request folder. Nothing agent-facing reports either path any more.
       expect(data.manifest).toEqual({ generator: "build_okf.py", version: "0.1" });
+      expect(data.manifestPath).toBeUndefined();
+      expect(data.corpusRoot).toBeUndefined();
+      expect(outcome.content).not.toContain("Corpus root:");
+      expect(outcome.content).not.toContain(fixture.root);
     } finally {
       await fixture.cleanup();
     }

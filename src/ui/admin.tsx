@@ -1354,6 +1354,13 @@ function Configuration({
           label="Embeddings endpoint"
           onCommit={(value) => void write({ rag: { ...draft.rag, endpoint: value } }, "Endpoint updated.")}
         />
+        <p style={styles.fieldHint}>
+          Must be an address Paperclip's outbound fetch allows. It refuses private IPv4 — 10/8, 172.16/12,
+          192.168/16, 127/8 and link-local — so an embedding server on your LAN is <em>not</em> reachable
+          from the worker, and setting one leaves semantic retrieval quietly falling back to keyword
+          search. A tailnet address (100.64/10) is allowed. Use <strong>Validate endpoint</strong> below:
+          it makes the call through the worker, which is the only check that proves this address works.
+        </p>
         <Field
           value={draft.rag.model}
           disabled={busy}

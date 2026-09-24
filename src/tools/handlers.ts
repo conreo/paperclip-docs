@@ -446,12 +446,19 @@ export async function sources(
   const status = await store.describe(config.corpusRoot, options);
 
   const lines: string[] = [];
-  lines.push(`Corpus root: ${status.root}`);
+  // Deliberately *not* the corpus path. This was the opening line — "Corpus root: …"
+  // — and that one line is how an agent with a shell on the host learned where the
+  // index, the pending request file and the embedding endpoint live, and then did the
+  // retrieval by hand instead of calling `search_docs`. An agent needs the snapshot's
+  // age and what is in it; the deployment's paths are the operator's business.
   if (!status.exists) {
     lines.push(`Status: unavailable — ${status.error ?? "the corpus could not be read"}`);
     return {
       content: lines.join("\n"),
-      data: { ...status, available: false },
+      // Not `...status`: the status carries the root, the manifest path and the
+      // per-bundle paths, and an unavailable corpus is exactly when an agent starts
+      // looking around for itself.
+      data: { available: false, error: status.error },
     };
   }
 
@@ -483,11 +490,12 @@ export async function sources(
         }`,
   );
   if (status.manifest) {
-    lines.push(
-      `Build manifest (${status.manifestPath}): ${JSON.stringify(status.manifest).slice(0, 2_000)}`,
-    );
+    // The manifest's contents are provenance an agent can legitimately use — when the
+    // corpus was built, from what. Its *path* is not: it names a directory on the
+    // host, and the same directory holds the index and the runner's request folder.
+    lines.push(`Build manifest: ${JSON.stringify(status.manifest).slice(0, 2_000)}`);
   } else if (status.manifestPath) {
-    lines.push(`Build manifest (${status.manifestPath}) could not be parsed.`);
+    lines.push("Build manifest: present but could not be parsed.");
   }
   if (status.skipped > 0) {
     lines.push(`Skipped: ${status.skipped} file(s) could not be read or were excluded.`);
@@ -497,7 +505,9 @@ export async function sources(
     content: lines.join("\n"),
     data: {
       available: true,
-      corpusRoot: status.root,
+      // No `corpusRoot` and no `manifestPath`. Both are host paths, and the settings
+      // page gets them from its own data handler — the one surface that legitimately
+      // needs to know where the corpus is.
       bundles: visible,
       totalConcepts: visibleConcepts,
       allowedBundles: config.allowedBundles,
@@ -506,7 +516,6 @@ export async function sources(
       ageDays: status.ageDays,
       stale: status.stale,
       manifest: status.manifest,
-      manifestPath: status.manifestPath,
       skipped: status.skipped,
     },
   };
