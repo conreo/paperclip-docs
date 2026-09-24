@@ -39,6 +39,7 @@ import {
   readOperatorConfig,
   toggleBundle,
   type OperatorConfig,
+  type OperatorSource,
 } from "../config.js";
 import { sanitizeErrorMessage } from "../errors.js";
 import { describeIndexLine, type BuildProgress } from "../index-build.js";
@@ -401,6 +402,189 @@ function ToolsGrant({ companyId, onMessage }: { companyId: string; onMessage: No
 // ---------------------------------------------------------------------------
 
 /** A heading, a sentence, and its controls. One idea per section. */
+/**
+ * The registry, as rows.
+ *
+ * This was the last setting with no control anywhere: `sources` was in the schema from
+ * the first version, the runner refuses a build request without it, and the live config
+ * of a working board held `[]` — so "Request a rebuild now" produced a request that
+ * nothing would honour, and no page could fix it. Adding a source is data, not code, so
+ * this is the whole of the per-organization work.
+ */
+const SOURCE_KINDS = ["git", "wiki", "llms", "local"] as const;
+
+/** Where a source actually lives, named the way each kind names it. */
+const SOURCE_LOCATION: Record<string, { label: string; placeholder: string; key: keyof OperatorSource }> = {
+  git: { label: "Repository", placeholder: "https://github.com/owner/repo", key: "repo" },
+  wiki: { label: "Wiki URL", placeholder: "https://wiki.example.com", key: "url" },
+  llms: { label: "llms.txt URL", placeholder: "https://example.com/llms.txt", key: "url" },
+  local: { label: "Folder", placeholder: "/srv/handbook", key: "path" },
+};
+
+function splitList(value: string): string[] {
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function SourcesEditor({
+  sources,
+  disabled,
+  onChange,
+  onMessage,
+}: {
+  sources: OperatorSource[];
+  disabled: boolean;
+  onChange: (next: OperatorSource[]) => void;
+  onMessage: Notify;
+}) {
+  const patch = (index: number, edits: Partial<OperatorSource>) =>
+    onChange(
+      sources.map((source, position) => (position === index ? { ...source, ...edits } : source)),
+    );
+
+  return (
+    <>
+      {sources.length === 0 ? (
+        <p style={styles.fieldHint}>
+          No sources are declared, so a rebuild request has nothing to fetch and the runner refuses it
+          with “request declares no sources”. The corpus on disk still works; this is only about
+          rebuilding it.
+        </p>
+      ) : null}
+
+      {sources.map((source, index) => {
+        const location = SOURCE_LOCATION[source.kind] ?? SOURCE_LOCATION.git!;
+        return (
+          <div key={`${source.id}-${index}`} style={sourceStyles.row}>
+            <div style={sourceStyles.head}>
+              <strong style={sourceStyles.name}>{source.id || "unnamed source"}</strong>
+              <Button
+                label="Remove"
+                disabled={disabled}
+                onClick={() => onChange(sources.filter((_, position) => position !== index))}
+              />
+            </div>
+
+            <Field
+              label="Bundle name"
+              value={source.id}
+              disabled={disabled}
+              placeholder="postgresql-16"
+              onCommit={(value) => {
+                const next = value.trim();
+                if (next.length === 0) {
+                  onMessage("A source needs a bundle name.", "error");
+                  return;
+                }
+                if (next.includes("/")) {
+                  onMessage("A bundle name cannot contain a slash — it is the folder name.", "error");
+                  return;
+                }
+                if (sources.some((other, position) => position !== index && other.id === next)) {
+                  onMessage(`${next} is already declared.`, "error");
+                  return;
+                }
+                patch(index, { id: next });
+              }}
+            />
+
+            <label style={sourceStyles.selectLabel}>
+              <span style={sourceStyles.caption}>Kind</span>
+              <select
+                value={source.kind}
+                disabled={disabled}
+                style={sourceStyles.select}
+                onChange={(event) => patch(index, { kind: event.target.value })}
+              >
+                {SOURCE_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kind}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <Field
+              label={location.label}
+              value={(source[location.key] as string | undefined) ?? ""}
+              disabled={disabled}
+              placeholder={location.placeholder}
+              onCommit={(value) => patch(index, { [location.key]: value.trim() } as Partial<OperatorSource>)}
+            />
+
+            <Field
+              label="Version to pin"
+              value={source.ref ?? ""}
+              disabled={disabled}
+              placeholder="v16 (empty: the default branch)"
+              onCommit={(value) => patch(index, { ref: value.trim() })}
+            />
+
+            <Field
+              label="Include globs (comma separated)"
+              value={(source.include ?? []).join(", ")}
+              disabled={disabled}
+              placeholder="**/*.md"
+              onCommit={(value) => patch(index, { include: splitList(value) })}
+            />
+
+            <Field
+              label="Exclude globs (comma separated)"
+              value={(source.exclude ?? []).join(", ")}
+              disabled={disabled}
+              placeholder="archive/**, **/changelog.md"
+              onCommit={(value) => patch(index, { exclude: splitList(value) })}
+            />
+          </div>
+        );
+      })}
+
+      <div style={styles.row}>
+        <Button
+          label="Add a source"
+          disabled={disabled}
+          onClick={() =>
+            onChange([
+              ...sources,
+              { id: "new-bundle", kind: "git", repo: "https://github.com/owner/repo" },
+            ])
+          }
+        />
+        <span style={styles.hint}>
+          Placeholder values, on purpose — rename the bundle and point it at a real repository. An
+          incomplete source fails the build rather than guessing.
+        </span>
+      </div>
+    </>
+  );
+}
+
+const sourceStyles: Record<string, CSSProperties> = {
+  row: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: "12px 14px",
+    border: "1px solid var(--border, #e4e7ec)",
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  head: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  name: { fontSize: 13, fontWeight: 600 },
+  selectLabel: { display: "flex", flexDirection: "column", gap: 4 },
+  caption: { fontSize: 12, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase", opacity: 0.7 },
+  select: {
+    padding: "6px 8px",
+    borderRadius: 8,
+    border: "1px solid var(--border, #e4e7ec)",
+    background: "var(--background, #fff)",
+    color: "inherit",
+    fontSize: 14,
+  },
+};
+
 function Section({
   title,
   description,
@@ -434,19 +618,86 @@ function Section({
  * "Advanced" disclosure. Grouping them is the difference between "here are eleven
  * settings" and "here is the corpus, and here is the optional ranking on top of it".
  */
-function GroupHeading({ title, description }: { title: string; description: string }) {
+/**
+ * A dashboard card: one idea, its current state, and its controls in one block.
+ *
+ * The page used to be a flat column of eighteen sections, which made "is my corpus
+ * working?" a reading exercise. The state pill answers that before anything is read,
+ * and it is computed from the same values the sections use — never a second guess at
+ * the truth.
+ */
+function Card({
+  title,
+  description,
+  state,
+  children,
+}: {
+  title: string;
+  description: string;
+  state?: { label: string; tone: "ok" | "off" | "warn" };
+  children: ReactNode;
+}) {
   return (
-    <div style={groupStyles.heading}>
-      <h2 style={groupStyles.title}>{title}</h2>
-      <p style={groupStyles.body}>{description}</p>
-    </div>
+    <section style={cardStyles.card}>
+      <header style={cardStyles.header}>
+        <div style={cardStyles.heading}>
+          <h2 style={cardStyles.title}>{title}</h2>
+          <p style={cardStyles.body}>{description}</p>
+        </div>
+        {state ? (
+          <span
+            style={{
+              ...cardStyles.pill,
+              ...(state.tone === "ok"
+                ? cardStyles.pillOk
+                : state.tone === "warn"
+                  ? cardStyles.pillWarn
+                  : cardStyles.pillOff),
+            }}
+          >
+            {state.label}
+          </span>
+        ) : null}
+      </header>
+      <div style={cardStyles.content}>{children}</div>
+    </section>
   );
 }
 
-const groupStyles: Record<string, CSSProperties> = {
-  heading: { display: "flex", flexDirection: "column", gap: 4, marginTop: 8 },
+const cardStyles: Record<string, CSSProperties> = {
+  card: {
+    display: "flex",
+    flexDirection: "column",
+    border: "1px solid var(--border, #e4e7ec)",
+    borderRadius: 12,
+    marginTop: 18,
+    overflow: "hidden",
+  },
+  header: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: "14px 16px",
+    background: "var(--muted, #f9fafb)",
+    borderBottom: "1px solid var(--border, #e4e7ec)",
+  },
+  heading: { display: "flex", flexDirection: "column", gap: 4 },
   title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", margin: 0 },
-  body: { fontSize: 14, color: "var(--muted-foreground, #667085)", margin: 0, lineHeight: 1.5 },
+  body: { fontSize: 13, color: "var(--muted-foreground, #667085)", margin: 0, lineHeight: 1.5, maxWidth: 620 },
+  pill: {
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: 600,
+    padding: "4px 10px",
+    borderRadius: 999,
+    whiteSpace: "nowrap",
+    border: "1px solid transparent",
+  },
+  pillOk: { background: "rgba(16, 122, 72, 0.12)", color: "#107a48", borderColor: "rgba(16, 122, 72, 0.25)" },
+  pillWarn: { background: "rgba(180, 83, 9, 0.12)", color: "#b45309", borderColor: "rgba(180, 83, 9, 0.25)" },
+  pillOff: { background: "rgba(102, 112, 133, 0.12)", color: "#667085", borderColor: "rgba(102, 112, 133, 0.25)" },
+  content: { display: "flex", flexDirection: "column", padding: "4px 16px 12px" },
 };
 
 /**
@@ -711,6 +962,50 @@ function Configuration({
     }
   }, [runRebuildIndex, companyId, onMessage]);
 
+  /**
+   * Delete one bundle from the corpus, and its vectors with it.
+   *
+   * Confirmed first, and the confirmation says what actually happens rather than
+   * "are you sure?": the pages are removed from disk, their vectors go with them,
+   * nothing is re-fetched, and hiding the bundle instead is one click away.
+   */
+  const runPruneBundle = usePluginAction(ACTION_KEYS.pruneBundle);
+  const [removing, setRemoving] = useState("");
+  const removeBundle = useCallback(
+    async (bundle: string, pages: number) => {
+      const question =
+        `Delete ${bundle} (${pages} ${pages === 1 ? "page" : "pages"}) from the corpus on disk?\n\n` +
+        `The pages are removed and their vectors are dropped from the index. Nothing is ` +
+        `re-fetched and nothing is re-embedded, so this is quick. It cannot be undone ` +
+        `from this page.\n\n` +
+        `To stop agents reading it without deleting it, switch it off instead.`;
+      if (typeof window !== "undefined" && !window.confirm(question)) return;
+
+      setRemoving(bundle);
+      try {
+        const outcome = (await runPruneBundle({ companyId, bundle })) as
+          | { written?: boolean; skipped?: string; path?: string; present?: boolean }
+          | undefined;
+        if (outcome?.written) {
+          onMessage(
+            outcome.present === false
+              ? `${bundle} was not in the corpus, so nothing was deleted.`
+              : `Deletion of ${bundle} requested (${outcome.path}). The runner removes the pages and their vectors — no fetch, no re-embedding.`,
+            outcome.present === false ? "error" : "success",
+          );
+          onSaved();
+        } else {
+          onMessage(`Nothing requested: ${outcome?.skipped ?? "the host returned nothing"}`, "error");
+        }
+      } catch (error) {
+        onMessage(sanitizeErrorMessage(error), "error");
+      } finally {
+        setRemoving("");
+      }
+    },
+    [runPruneBundle, companyId, onMessage, onSaved],
+  );
+
   /** Write one change immediately, the way a General settings switch does. */
   const write = useCallback(
     async (edits: Partial<OperatorConfig>, announce?: string) => {
@@ -770,10 +1065,20 @@ function Configuration({
 
   return (
     <>
-      <GroupHeading
+      <Card
         title="OKF"
-        description="The corpus itself: where it lives, which parts of it this organization may read, and how it is refreshed. Nothing in this section changes how results are ranked."
-      />
+        description="The corpus itself: where it lives, what to build, which parts of it this organization may read, and how it is refreshed. Nothing here changes how results are ranked."
+        state={
+          !draft.enabled
+            ? { label: "Tools off", tone: "off" }
+            : names.length === 0
+              ? { label: "No corpus", tone: "warn" }
+              : {
+                  label: `${readable.length} of ${names.length} bundle${names.length === 1 ? "" : "s"} readable`,
+                  tone: readable.length === 0 ? "warn" : "ok",
+                }
+        }
+      >
 
       <Section
         title="Documentation tools"
@@ -846,6 +1151,16 @@ function Configuration({
                   <span style={styles.bundleCount}>
                     {bundle.conceptCount} {bundle.conceptCount === 1 ? "page" : "pages"}
                   </span>
+                  {/* Two different removals, deliberately side by side. Switching the
+                      bundle off stops agents reading it and is reversible in a click;
+                      this deletes the pages from disk. Until now the page offered only
+                      the first and called it "which bundles agents may read", which is
+                      not the same question as "what is still in the corpus". */}
+                  <Button
+                    label={removing === bundle.name ? "Requesting…" : "Delete"}
+                    disabled={busy || removing.length > 0}
+                    onClick={() => void removeBundle(bundle.name, bundle.conceptCount)}
+                  />
                 </li>
               ))}
             </ul>
@@ -860,9 +1175,44 @@ function Configuration({
       </Section>
 
       <Section
+        title="Sources to build"
+        description="This organization's registry: what to fetch, and which version of it. Adding a source is data, not code, so this is the whole of the per-organization work. It is only used when a build is requested — nothing here changes what agents can read right now."
+      >
+        <SourcesEditor
+          sources={draft.sources}
+          disabled={busy}
+          onMessage={onMessage}
+          onChange={(next) => void write({ sources: next }, "Sources updated.")}
+        />
+      </Section>
+
+      <Section
         title="Rebuilding"
         description="This plugin cannot fetch anything: the runtime gives it no way to run git or pandoc. Collaborating with a runner on the host, it writes a request; the runner performs the build and writes the corpus."
       >
+        {/* The schedule itself, which had no control at all: `refresh.enabled` was in
+            the schema from the first version and stayed false forever, so the only way
+            a rebuild ever happened was a person pressing the button below. */}
+        <div style={styles.row}>
+          <Switch
+            checked={draft.refresh.enabled}
+            disabled={busy}
+            label="Let the schedule ask for a rebuild when the corpus is older than the age below"
+            onChange={(next) =>
+              void write(
+                { refresh: { ...draft.refresh, enabled: next } },
+                next
+                  ? "This organization may be asked to rebuild on a schedule."
+                  : "Scheduled rebuilds are off for this organization.",
+              )
+            }
+          />
+          <span style={styles.hint}>
+            {draft.refresh.enabled
+              ? "A scheduled check may write a rebuild request when the corpus is older than the age below."
+              : "Nothing will ask for a rebuild on a schedule. The button below still works."}
+          </span>
+        </div>
         <Field
           value={String(draft.refresh.maxAgeDays)}
           disabled={busy}
@@ -942,11 +1292,22 @@ function Configuration({
         />
       </Section>
       </details>
+      </Card>
 
-      <GroupHeading
+      <Card
         title="RAG"
         description="Ranking by meaning, on top of keyword search rather than instead of it. It needs two things outside this page: an embedding endpoint, and a vector index written by your host's indexer. The plugin only reads the index."
-      />
+        state={
+          !draft.rag.enabled
+            ? { label: "Keyword only", tone: "off" }
+            : embeddings
+              ? {
+                  label: `${embeddings.count.toLocaleString("en-US")} vectors · ${embeddings.model}`,
+                  tone: embeddings.complete ? "ok" : "warn",
+                }
+              : { label: "On, but no index", tone: "warn" }
+        }
+      >
 
       <Section
         title="Semantic retrieval"
@@ -1080,7 +1441,27 @@ function Configuration({
             void write({ rag: { ...draft.rag, weight: parsed } }, "Weight updated.");
           }}
         />
+
+        {/* Also in the schema since the first version, and also with no control: the
+            blend draws this many candidates from the index before ranking them, so
+            without it the number was whatever the default happened to be. */}
+        <Field
+          value={String(draft.rag.topK)}
+          disabled={busy || !draft.rag.enabled}
+          placeholder="20"
+          label="Candidates from the index"
+          numeric
+          onCommit={(value) => {
+            const parsed = Number.parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 1 || parsed > 500) {
+              onMessage("Candidates from the index must be a whole number between 1 and 500.", "error");
+              return;
+            }
+            void write({ rag: { ...draft.rag, topK: parsed } }, "Index candidates updated.");
+          }}
+        />
       </Section>
+      </Card>
     </>
   );
 }

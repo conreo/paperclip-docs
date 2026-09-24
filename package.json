@@ -1,6 +1,6 @@
 {
   "name": "paperclip-docs",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "description": "Serve an Open Knowledge Format (OKF) corpus to Paperclip agents as governed, read-only tools \u2014 search, read, browse, and report the snapshot's age \u2014 with a per-organization source registry, host-side rebuild requests, and optional semantic retrieval.",
   "scripts": {

@@ -12,7 +12,7 @@
 export const PLUGIN_ID = "paperclip-docs";
 
 /** Manifest version; keep in sync with package.json. */
-export const PLUGIN_VERSION = "0.3.3";
+export const PLUGIN_VERSION = "0.3.4";
 
 /**
  * An example corpus location, for documentation and the form's placeholder.

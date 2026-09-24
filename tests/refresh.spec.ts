@@ -222,4 +222,33 @@ describe("what a request asks the runner for", () => {
     });
     expect(request.embed).toBeUndefined();
   });
+
+  it("carries a removal only on a prune request", () => {
+    // A deletion attached to a build request is the one combination that could delete
+    // something nobody asked to delete.
+    const prune = buildRefreshRequest("/corpus", [], "test", {
+      now: NOW,
+      mode: "prune",
+      remove: { bundles: ["nextcloud"] },
+    });
+    expect(prune.mode).toBe("prune");
+    expect(prune.remove).toEqual({ bundles: ["nextcloud"] });
+    expect(prune.embed).toBeUndefined();
+
+    const build = buildRefreshRequest("/corpus", [SOURCE], "test", {
+      now: NOW,
+      mode: "both",
+      remove: { bundles: ["nextcloud"] },
+    });
+    expect(build.remove).toBeUndefined();
+  });
+
+  it("drops an empty removal rather than writing a request the runner refuses", () => {
+    const request = buildRefreshRequest("/corpus", [], "test", {
+      now: NOW,
+      mode: "prune",
+      remove: { bundles: [] },
+    });
+    expect(request.remove).toBeUndefined();
+  });
 });

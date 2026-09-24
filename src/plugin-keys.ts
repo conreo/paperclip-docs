@@ -67,6 +67,17 @@ export const ACTION_KEYS = {
    * get semantic ranking back.
    */
   rebuildIndex: "rebuild-index",
+
+  /**
+   * Delete one bundle from the corpus, and its vectors with it.
+   *
+   * Distinct from hiding a bundle, which is what switching it off under "Bundles
+   * agents may read" does: that leaves the pages on disk and only stops serving
+   * them, and it is reversible in one click. This removes the files. The runner does
+   * it without fetching anything, and drops exactly the index rows whose concept ids
+   * belonged to the bundle, so nothing is re-embedded.
+   */
+  pruneBundle: "prune-bundle",
 } as const;
 
 /**

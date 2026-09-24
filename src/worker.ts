@@ -540,6 +540,70 @@ const plugin = definePlugin({
       actionsFor(ctx).add(ACTION_KEYS.rebuildIndex);
     }
 
+    /**
+     * Delete one bundle, and its vectors, from the corpus.
+     *
+     * The plugin deletes nothing itself — the runtime gives its worker no way to
+     * remove a tree it serves — so this writes a `prune` request the host runner
+     * honours. Nothing is fetched and nothing is embedded: the pages go and the index
+     * loses exactly their rows, which is why this is cheap enough to be a button.
+     *
+     * The name is validated here as well as in the runner. Two checks for one rule is
+     * usually one too many, but this one guards a *deletion*: a bundle name arriving
+     * from a page parameter is the last place to discover that `../../` is a name.
+     */
+    if (!actionsFor(ctx).has(ACTION_KEYS.pruneBundle)) {
+      ctx.actions.register(ACTION_KEYS.pruneBundle, async (params) => {
+        const companyId =
+          typeof params?.["companyId"] === "string" && params["companyId"].trim().length > 0
+            ? params["companyId"].trim()
+            : "";
+        if (!companyId) {
+          return { written: false, skipped: "no company scope on this action" };
+        }
+        const raw = typeof params?.["bundle"] === "string" ? params["bundle"].trim() : "";
+        const bundle = raw.endsWith("/") ? raw.replace(/\/+$/, "") : raw;
+        if (
+          bundle.length === 0 ||
+          bundle.includes("/") ||
+          bundle.includes("\\") ||
+          bundle === "." ||
+          bundle === ".." ||
+          bundle.startsWith("~")
+        ) {
+          return { written: false, skipped: `'${raw}' is not a bundle name` };
+        }
+
+        const { config: scoped, error: scopedError } = await loadConfig(ctx, companyId);
+        if (scopedError) {
+          return { written: false, skipped: `the configuration could not be read: ${scopedError}` };
+        }
+        if (scoped.corpusRoot.trim().length === 0) {
+          return { written: false, skipped: "no corpus is configured for this organization" };
+        }
+
+        // Reported, not enforced: the corpus on disk is the truth, and the runner
+        // checks the same thing again. This is only so the page can say "already gone"
+        // rather than claiming to have deleted something that was not there.
+        const status = await store.describe(scoped.corpusRoot);
+        const present = status.bundles.some((entry) => entry.name === bundle);
+
+        const outcome = await writeRefreshRequest(
+          scoped.corpusRoot,
+          buildRefreshRequest(
+            scoped.corpusRoot,
+            scoped.sources,
+            `removal of ${bundle} requested from the settings page; nothing is fetched`,
+            { mode: "prune", remove: { bundles: [bundle] } },
+          ),
+        );
+        ctx.logger.info("paperclip-docs prune request", { companyId, bundle, present, ...outcome });
+        const response = await readRefreshResponse(scoped.corpusRoot);
+        return { ...outcome, bundle, present, lastBuild: response };
+      });
+      actionsFor(ctx).add(ACTION_KEYS.pruneBundle);
+    }
+
     // -----------------------------------------------------------------
     // Data handlers — the settings page's read-only view of the corpus.
     // -----------------------------------------------------------------

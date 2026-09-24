@@ -31,12 +31,17 @@ import { MAX_ARG_STRING_CHARS, REQUEST_FILENAME, RESPONSE_FILENAME } from "./con
 import type { RuntimeSourceDeclaration } from "./runtime-config.js";
 
 /** Which half of the pipeline a request asks for. */
-export type RequestMode = "okf" | "index" | "both";
+export type RequestMode = "okf" | "index" | "both" | "prune";
 
 /** The embedding settings a request carries, when it is allowed to embed. */
 export interface RequestEmbed {
   endpoint: string;
   model: string;
+}
+
+/** What a `prune` request asks the runner to delete. */
+export interface RequestRemoval {
+  bundles: string[];
 }
 
 /** The on-disk request the host runner reads. */
@@ -53,7 +58,9 @@ export interface RefreshRequest {
    *
    * `index` rebuilds the vector index from the corpus already on disk and fetches
    * nothing — which is the point: an index has to be rebuildable after the sources
-   * that built the corpus have moved, changed shape, or been removed.
+   * that built the corpus have moved, changed shape, or been removed. `prune` goes
+   * further still: it deletes pages and their vectors, so it must not need the source
+   * that produced them to exist at all.
    */
   mode: RequestMode;
   /** The registry the operator declared for this company. */
@@ -64,6 +71,8 @@ export interface RefreshRequest {
    * a rebuild avoids throwing the index away.
    */
   embed?: RequestEmbed;
+  /** Present only for `prune`: what to delete. */
+  remove?: RequestRemoval;
 }
 
 /**
@@ -124,7 +133,7 @@ export function buildRefreshRequest(
   corpusRoot: string,
   sources: RuntimeSourceDeclaration[],
   reason: string,
-  options: { mode?: RequestMode; embed?: RequestEmbed; now?: Date } = {},
+  options: { mode?: RequestMode; embed?: RequestEmbed; remove?: RequestRemoval; now?: Date } = {},
 ): RefreshRequest {
   const mode: RequestMode = options.mode ?? (options.embed ? "both" : "okf");
   const request: RefreshRequest = {
@@ -141,6 +150,11 @@ export function buildRefreshRequest(
   // that ambiguity.
   if (options.embed && mode !== "okf") {
     request.embed = { endpoint: options.embed.endpoint, model: options.embed.model };
+  }
+  // Only a prune carries a removal. A deletion attached to a build request is the one
+  // combination that could delete something nobody asked to delete.
+  if (options.remove && mode === "prune" && options.remove.bundles.length > 0) {
+    request.remove = { bundles: [...options.remove.bundles] };
   }
   return request;
 }
