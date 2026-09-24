@@ -324,6 +324,21 @@ index that covers only some bundles — each of those returns keyword results pl
 explaining what did not happen. An operator who switched this on deserves to know when they did not
 get it.
 
+### The endpoint has to be reachable *from the worker*
+
+The plugin calls it through Paperclip's outbound fetch, which refuses private IPv4
+(`10/8`, `172.16/12`, `192.168/16`, `127/8`, link-local) and allows the tailnet range
+`100.64/10`. An embedding server on your LAN therefore cannot be called from here, and
+configuring one leaves semantic retrieval **on in the settings page and absent in
+practice** — search keeps working, keyword-only, and the page's status line still shows
+the index.
+
+**Validate endpoint** makes the call through the worker, which is the only check that
+proves an address works; a `curl` from the host proves nothing about the worker.
+[`deploy/README.md`](https://github.com/conreo/paperclip-docs-builder/blob/main/deploy/README.md)
+in the builder covers the embedding server itself, the tailnet route, and the flags that
+fail confusingly.
+
 ## How this differs from the bundled LLM Wiki plugin
 
 Both deal with local documentation, in opposite directions, and they compose well:
